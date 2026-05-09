@@ -63,7 +63,7 @@ import {
   normalizeRiskPerTradePct,
 } from "./src/lib/backtestValidation";
 import {
-  OKX_AUTO_DATA_REQUEST_TIMEOUT_MS,
+  BINANCE_AUTO_DATA_REQUEST_TIMEOUT_MS,
   createReconnectSchedule,
   getDataRetryDelayMs,
   isExchangeConnectivityErrorDetails,
@@ -130,8 +130,8 @@ type ExchangeProxyStatus = {
 type ExchangeConnectivityStatus = {
   checkedAt: number | null;
   lastCheckedAt: number | null;
-  okxPublic: boolean | null;
-  okxPrivate: boolean | null;
+  binancePublic: boolean | null;
+  binancePrivate: boolean | null;
   error: string | null;
   lastError: string | null;
   nextRetryAt: number | null;
@@ -168,8 +168,8 @@ function getExchangeConnectivityStatus() {
   return lastExchangeConnectivityStatus || {
     checkedAt: null,
     lastCheckedAt: null,
-    okxPublic: null,
-    okxPrivate: null,
+    binancePublic: null,
+    binancePrivate: null,
     error: null,
     lastError: null,
     nextRetryAt: null,
@@ -191,7 +191,7 @@ function updateExchangeConnectivityStatus(patch: Partial<ExchangeConnectivitySta
   return lastExchangeConnectivityStatus;
 }
 
-function markExchangeConnectivitySuccess(patch: Partial<Pick<ExchangeConnectivityStatus, "okxPublic" | "okxPrivate" | "proxy">> = {}) {
+function markExchangeConnectivitySuccess(patch: Partial<Pick<ExchangeConnectivityStatus, "binancePublic" | "binancePrivate" | "proxy">> = {}) {
   return updateExchangeConnectivityStatus({
     ...patch,
     error: null,
@@ -201,7 +201,7 @@ function markExchangeConnectivitySuccess(patch: Partial<Pick<ExchangeConnectivit
   });
 }
 
-function markExchangeConnectivityFailure(error: any, patch: Partial<Pick<ExchangeConnectivityStatus, "okxPublic" | "okxPrivate" | "proxy">> = {}) {
+function markExchangeConnectivityFailure(error: any, patch: Partial<Pick<ExchangeConnectivityStatus, "binancePublic" | "binancePrivate" | "proxy">> = {}) {
   const previous = getExchangeConnectivityStatus();
   const message = formatExchangeConnectivityError(error);
   const consecutiveFailures = Math.max(1, Number(previous.consecutiveFailures || 0) + 1);
@@ -288,7 +288,7 @@ function disableExchangeProxy(error?: any) {
     clearExchangeProxy(exchange);
   }
   const message = error?.cause?.message || error?.message || String(error || "unknown proxy error");
-  console.warn(`[Proxy] ${EXCHANGE_PROXY_URL} unavailable, falling back to direct OKX requests. ${message}`);
+  console.warn(`[Proxy] ${redactProxyUrlForStatus(EXCHANGE_PROXY_URL)} unavailable, falling back to direct Binance requests. ${message}`);
 }
 
 function restoreExchangeProxy(reason?: string) {
@@ -334,7 +334,7 @@ async function prepareExchange(exchange: any) {
   }
   if (!exchangeProxyReady.has(exchange)) {
     exchangeProxyReady.set(exchange, exchange.loadProxyModules().then(() => {
-      console.log(`[Proxy] Exchange traffic routed through ${EXCHANGE_PROXY_URL}`);
+      console.log(`[Proxy] Exchange traffic routed through ${redactProxyUrlForStatus(EXCHANGE_PROXY_URL)}`);
     }));
   }
   await exchangeProxyReady.get(exchange);
@@ -418,18 +418,20 @@ async function writeFileAtomic(filePath: string, contents: string, options?: { m
 
 // --- Global Exchange Instances (for reuse) ---
 
-function getPrivateExchange(apiKey: string, secret: string, password: string, sandbox: boolean) {
-  const key = `${apiKey}_${secret}_${password}_${sandbox}`;
+function getPrivateExchange(apiKey: string, secret: string, password: string | undefined, sandbox: boolean) {
+  const key = crypto
+    .createHash("sha256")
+    .update(JSON.stringify({ apiKey, secret, password, sandbox }))
+    .digest("hex");
   if (!privateExchanges.has(key)) {
-    const exchange = new (ccxt as any).okx({
+    const exchange = new (ccxt as any).binanceusdm({
       apiKey,
       secret,
-      password,
       enableRateLimit: true,
-      timeout: OKX_AUTO_DATA_REQUEST_TIMEOUT_MS,
+      timeout: BINANCE_AUTO_DATA_REQUEST_TIMEOUT_MS,
       options: {
-        defaultType: "swap",
-        fetchMarkets: { types: ["swap", "spot"] },
+        defaultType: "future",
+        defaultSubType: "linear",
       },
     });
     applyExchangeProxy(exchange);
@@ -437,8 +439,6 @@ function getPrivateExchange(apiKey: string, secret: string, password: string, sa
       try {
         exchange.setSandboxMode(true);
       } catch (e) {}
-      exchange.headers = { ...(exchange.headers || {}), 'x-simulated-trading': '1' };
-      exchange.options.defaultHeaders = { ...(exchange.options.defaultHeaders || {}), 'x-simulated-trading': '1' };
     }
     privateExchanges.set(key, exchange);
   }
@@ -465,10 +465,13 @@ async function retry<T>(fn: () => Promise<T>, retries = 3, delay = 1000): Promis
 function toCcxtSymbol(symbol: string): string {
   if (!symbol) return "BTC/USDT:USDT";
   let s = String(symbol).toUpperCase();
+  if (/^[A-Z0-9]+USDT$/.test(s)) {
+    return `${s.slice(0, -4)}/USDT:USDT`;
+  }
   // If it's already a CCXT unified symbol for swap (contains :)
   if (s.includes(':')) return s;
   if (s.endsWith("-SWAP")) {
-    // Convert OKX native ID (e.g. BTC-USDT-SWAP) to CCXT unified symbol (e.g. BTC/USDT:USDT)
+    // Convert Binance native ID (e.g. BTC-USDT-SWAP) to CCXT unified symbol (e.g. BTC/USDT:USDT)
     const base = s.replace("-SWAP", "");
     const parts = base.split("-");
     if (parts.length >= 2) {
@@ -482,20 +485,26 @@ function toCcxtSymbol(symbol: string): string {
   return `${base}/${quote}:${quote}`;
 }
 
-function toOkxSwapInstId(symbol: string): string {
-  if (!symbol) return "BTC-USDT-SWAP";
+function toBinanceSwapInstId(symbol: string): string {
+  if (!symbol) return "BTCUSDT";
   const upper = String(symbol).toUpperCase();
-  if (upper.endsWith("-SWAP")) return upper;
-  const clean = upper.includes(":") ? upper.split(":")[0] : upper;
-  return `${clean.replace("/", "-")}-SWAP`;
+  if (/^[A-Z0-9]+USDT$/.test(upper)) return upper;
+  const clean = upper.includes(":") ? upper.split(":")[0] : upper.replace("-SWAP", "");
+  return clean.replace("/", "").replace("-", "");
 }
 
 function toCcxtLikeSwapSymbol(instId: string): string {
-  const [base, quote] = String(instId || "BTC-USDT-SWAP").replace("-SWAP", "").split("-");
+  const normalized = String(instId || "BTCUSDT").toUpperCase().replace("-SWAP", "");
+  if (normalized.includes("-")) {
+    const [base, quote] = normalized.split("-");
+    return `${base}/${quote}:USDT`;
+  }
+  const quote = normalized.endsWith("USDT") ? "USDT" : "USDT";
+  const base = normalized.endsWith(quote) ? normalized.slice(0, -quote.length) : normalized;
   return `${base}/${quote}:USDT`;
 }
 
-type OkxResolvedSwapMarket = {
+type BinanceResolvedSwapMarket = {
   requestedSymbol: string;
   displaySymbol: string;
   instId: string;
@@ -512,8 +521,8 @@ type OkxResolvedSwapMarket = {
   state: string;
 };
 
-const okxSwapMarketCache = new Map<string, { expiresAt: number; value: OkxResolvedSwapMarket }>();
-const OKX_SWAP_MARKET_CACHE_TTL_MS = 5 * 60 * 1000;
+const binanceSwapMarketCache = new Map<string, { expiresAt: number; value: BinanceResolvedSwapMarket }>();
+const Binance_SWAP_MARKET_CACHE_TTL_MS = 5 * 60 * 1000;
 
 function ceilToStep(value: number, step: number) {
   if (!Number.isFinite(value) || value <= 0) return 0;
@@ -527,110 +536,113 @@ function formatToStepString(value: number, step: number) {
   return Number(value).toFixed(decimals);
 }
 
-function findLoadedOkxSwapMarket(exchange: any, instId: string, displaySymbol: string) {
+function findLoadedBinanceSwapMarket(exchange: any, instId: string, displaySymbol: string) {
   const markets = Object.values(exchange?.markets || {}) as any[];
   return markets.find((market) => {
     const marketDisplaySymbol = normalizeDisplaySymbol(String(market?.symbol || market?.id || ""));
-    const marketInstId = String(market?.id || market?.info?.instId || "").toUpperCase();
-    const settle = String(market?.settle || market?.info?.settleCcy || "").toUpperCase();
+    const marketInstId = String(market?.id || market?.info?.symbol || "").toUpperCase();
+    const settle = String(market?.settle || market?.info?.marginAsset || "").toUpperCase();
     return (
       marketInstId === instId.toUpperCase() ||
       (
         marketDisplaySymbol === displaySymbol &&
-        (market?.swap || market?.type === "swap" || marketInstId.endsWith("-SWAP")) &&
+        (market?.swap || market?.future || market?.type === "swap" || market?.type === "future") &&
         (!settle || settle === "USDT")
       )
     );
   }) || null;
 }
 
-async function resolveOkxSwapMarket(symbol: string, exchange?: any): Promise<OkxResolvedSwapMarket> {
+async function resolveBinanceSwapMarket(symbol: string, exchange?: any): Promise<BinanceResolvedSwapMarket> {
   const requestedSymbol = String(symbol || "BTC/USDT");
   const displaySymbol = normalizeDisplaySymbol(requestedSymbol);
-  const instId = toOkxSwapInstId(displaySymbol);
-  const cached = okxSwapMarketCache.get(instId);
+  const instId = toBinanceSwapInstId(displaySymbol);
+  const cached = binanceSwapMarketCache.get(instId);
   if (cached && cached.expiresAt > Date.now()) return cached.value;
 
-  const loadedMarket = findLoadedOkxSwapMarket(exchange, instId, displaySymbol);
+  if (exchange && !exchange.markets) await exchange.loadMarkets();
+  if (!publicExchange.markets) await publicExchange.loadMarkets();
+  const loadedMarket = findLoadedBinanceSwapMarket(exchange, instId, displaySymbol);
+  const publicMarket = loadedMarket || findLoadedBinanceSwapMarket(publicExchange, instId, displaySymbol);
   const [base = "BTC", quote = "USDT"] = displaySymbol.split("/");
-  const rawMarket = loadedMarket
-    ? loadedMarket.info || {}
-    : (await okxPublicGet("/api/v5/public/instruments", { instType: "SWAP", instId }))[0];
+  const rawMarket = publicMarket?.info || {};
 
-  if (!rawMarket) {
-    throw requestError(400, `Resolved OKX swap instrument ${instId} not found`, {
-      error: `Resolved OKX swap instrument ${instId} not found`,
+  if (!publicMarket) {
+    throw requestError(400, `Resolved Binance USD-M futures instrument ${instId} not found`, {
+      error: `Resolved Binance USD-M futures instrument ${instId} not found`,
       requestedSymbol,
       displaySymbol,
       instId,
     });
   }
 
-  const resolved: OkxResolvedSwapMarket = {
+  const resolved: BinanceResolvedSwapMarket = {
     requestedSymbol,
     displaySymbol,
-    instId: String(rawMarket.instId || loadedMarket?.id || instId),
-    resolvedMarketId: String(rawMarket.instId || loadedMarket?.id || instId),
-    resolvedMarketSymbol: normalizeDisplaySymbol(String(loadedMarket?.symbol || rawMarket.instId || displaySymbol)),
-    base: String(rawMarket.baseCcy || base || "BTC").toUpperCase(),
-    quote: String(rawMarket.quoteCcy || quote || "USDT").toUpperCase(),
-    settleCcy: String(rawMarket.settleCcy || loadedMarket?.settle || "USDT").toUpperCase(),
-    ctVal: firstNumber(rawMarket.ctVal, loadedMarket?.contractSize, 1),
-    lotSz: firstNumber(rawMarket.lotSz, loadedMarket?.info?.lotSz, loadedMarket?.limits?.amount?.min, 0.01),
-    minSz: firstNumber(rawMarket.minSz, loadedMarket?.limits?.amount?.min, rawMarket.lotSz, 0.01),
-    tickSz: firstNumber(rawMarket.tickSz, loadedMarket?.precision?.price, 0.1),
-    leverageCap: firstNumber(rawMarket.lever, null),
-    state: String(rawMarket.state || "live"),
+    instId: String(publicMarket.id || rawMarket.symbol || instId),
+    resolvedMarketId: String(publicMarket.id || rawMarket.symbol || instId),
+    resolvedMarketSymbol: String(publicMarket.symbol || toCcxtSymbol(displaySymbol)),
+    base: String(publicMarket.base || rawMarket.baseAsset || base || "BTC").toUpperCase(),
+    quote: String(publicMarket.quote || rawMarket.quoteAsset || quote || "USDT").toUpperCase(),
+    settleCcy: String(publicMarket.settle || rawMarket.marginAsset || "USDT").toUpperCase(),
+    ctVal: firstNumber(publicMarket.contractSize, 1),
+    lotSz: firstNumber(publicMarket.limits?.amount?.min, publicMarket.precision?.amount, 0.001),
+    minSz: firstNumber(publicMarket.limits?.amount?.min, 0.001),
+    tickSz: firstNumber(publicMarket.precision?.price, 0.1),
+    leverageCap: firstNumber(rawMarket?.brackets?.[0]?.initialLeverage, null),
+    state: String(rawMarket.status || "TRADING").toLowerCase(),
   };
-  okxSwapMarketCache.set(instId, {
+  binanceSwapMarketCache.set(instId, {
     value: resolved,
-    expiresAt: Date.now() + OKX_SWAP_MARKET_CACHE_TTL_MS,
+    expiresAt: Date.now() + Binance_SWAP_MARKET_CACHE_TTL_MS,
   });
   return resolved;
 }
 
-function normalizeOkxOrderStatus(state: string | undefined | null) {
+function normalizeBinanceOrderStatus(state: string | undefined | null) {
   const normalized = String(state || "").toLowerCase();
   if (normalized === "filled") return "closed";
-  if (normalized === "canceled" || normalized === "cancelled" || normalized === "mmp_canceled") return "canceled";
-  if (normalized === "partially_filled" || normalized === "live" || normalized === "effective") return "open";
+  if (normalized === "canceled" || normalized === "cancelled" || normalized === "expired" || normalized === "rejected") return "canceled";
+  if (normalized === "partially_filled" || normalized === "new" || normalized === "open") return "open";
   return normalized || "unknown";
 }
 
-function normalizeOkxRawOrder(rawOrder: any, resolvedMarket: OkxResolvedSwapMarket) {
-  const amount = firstNumber(rawOrder?.sz);
-  const filled = firstNumber(rawOrder?.accFillSz, rawOrder?.fillSz);
-  const price = firstNumber(rawOrder?.px, rawOrder?.avgPx);
-  const average = firstNumber(rawOrder?.avgPx, rawOrder?.fillPx, price);
+function normalizeBinanceRawOrder(rawOrder: any, resolvedMarket: BinanceResolvedSwapMarket) {
+  const info = rawOrder?.info || rawOrder || {};
+  const amount = firstNumber(rawOrder?.amount, info.origQty, info.quantity);
+  const filled = firstNumber(rawOrder?.filled, info.executedQty);
+  const price = firstNumber(rawOrder?.price, info.price);
+  const average = firstNumber(rawOrder?.average, info.avgPrice, price);
   const remaining = Number.isFinite(amount) && Number.isFinite(filled)
     ? Math.max(0, amount - filled)
-    : undefined;
-  const feeCost = firstNumber(rawOrder?.fee);
+    : rawOrder?.remaining;
+  const feeCost = firstNumber(rawOrder?.fee?.cost, info.commission);
   return {
-    id: String(rawOrder?.ordId || rawOrder?.algoId || rawOrder?.clOrdId || "").trim() || undefined,
-    clientOrderId: String(rawOrder?.clOrdId || "").trim() || undefined,
+    id: String(rawOrder?.id || info.orderId || info.orderListId || "").trim() || undefined,
+    clientOrderId: String(rawOrder?.clientOrderId || info.clientOrderId || "").trim() || undefined,
     symbol: resolvedMarket.displaySymbol,
     instId: resolvedMarket.instId,
-    type: rawOrder?.ordType || "market",
-    side: rawOrder?.side,
+    type: rawOrder?.type || String(info.type || "market").toLowerCase(),
+    side: String(rawOrder?.side || info.side || "").toLowerCase(),
     price,
     average,
     amount,
     filled,
     remaining,
-    status: normalizeOkxOrderStatus(rawOrder?.state),
+    status: normalizeBinanceOrderStatus(rawOrder?.status || info.status),
     fee: feeCost !== null ? {
-      currency: rawOrder?.feeCcy || resolvedMarket.settleCcy,
+      currency: rawOrder?.fee?.currency || info.commissionAsset || resolvedMarket.settleCcy,
       cost: Math.abs(feeCost),
     } : undefined,
     info: rawOrder,
   };
 }
 
-function normalizeOkxHistoryOrder(rawOrder: any, resolvedMarket: OkxResolvedSwapMarket) {
-  const normalized = normalizeOkxRawOrder(rawOrder, resolvedMarket);
-  const timestamp = firstNumber(rawOrder?.uTime, rawOrder?.cTime, rawOrder?.fillTime, Date.now());
-  const lastTradeTimestamp = firstNumber(rawOrder?.fillTime, rawOrder?.uTime, rawOrder?.cTime);
+function normalizeBinanceHistoryOrder(rawOrder: any, resolvedMarket: BinanceResolvedSwapMarket) {
+  const normalized = normalizeBinanceRawOrder(rawOrder, resolvedMarket);
+  const info = rawOrder?.info || rawOrder || {};
+  const timestamp = firstNumber(rawOrder?.timestamp, info.updateTime, info.time, Date.now());
+  const lastTradeTimestamp = firstNumber(rawOrder?.lastTradeTimestamp, info.updateTime, info.time);
   const average = firstNumber(normalized.average, normalized.price);
   const filled = firstNumber(normalized.filled);
   const cost = average > 0 && filled > 0 ? average * filled : undefined;
@@ -643,11 +655,11 @@ function normalizeOkxHistoryOrder(rawOrder: any, resolvedMarket: OkxResolvedSwap
   };
 }
 
-function unwrapOkxApiRow(response: any) {
+function unwrapBinanceApiRow(response: any) {
   const code = String(response?.code ?? "0");
   if (code !== "0") {
-    throw requestError(502, response?.msg || "OKX request failed", {
-      error: response?.msg || "OKX request failed",
+    throw requestError(502, response?.msg || "Binance request failed", {
+      error: response?.msg || "Binance request failed",
       code,
       response,
     });
@@ -655,11 +667,11 @@ function unwrapOkxApiRow(response: any) {
   return Array.isArray(response?.data) ? response.data[0] || null : null;
 }
 
-function unwrapOkxApiRows(response: any) {
+function unwrapBinanceApiRows(response: any) {
   const code = String(response?.code ?? "0");
   if (code !== "0") {
-    throw requestError(502, response?.msg || "OKX request failed", {
-      error: response?.msg || "OKX request failed",
+    throw requestError(502, response?.msg || "Binance request failed", {
+      error: response?.msg || "Binance request failed",
       code,
       response,
     });
@@ -667,20 +679,24 @@ function unwrapOkxApiRows(response: any) {
   return Array.isArray(response?.data) ? response.data : [];
 }
 
-async function fetchOkxTradeOrderRaw(
+async function fetchBinanceTradeOrderRaw(
   exchange: any,
   exchangeCall: <T>(fn: () => Promise<T>) => Promise<T>,
   instId: string,
   identifiers: { ordId?: string | null; clOrdId?: string | null }
 ) {
-  const request: Record<string, any> = { instId };
-  if (identifiers.ordId) request.ordId = identifiers.ordId;
-  else if (identifiers.clOrdId) request.clOrdId = identifiers.clOrdId;
-  else throw new Error("Main order identifier is unavailable");
-  return unwrapOkxApiRow(await retry(() => exchangeCall(() => (exchange as any).privateGetTradeOrder(request))));
+  const symbol = toCcxtSymbol(instId);
+  const params: Record<string, any> = {};
+  let id = identifiers.ordId || undefined;
+  if (!id && identifiers.clOrdId) {
+    id = identifiers.clOrdId;
+    params.origClientOrderId = identifiers.clOrdId;
+  }
+  if (!id) throw new Error("Main order identifier is unavailable");
+  return retry(() => exchangeCall(() => exchange.fetchOrder(id, symbol, params)));
 }
 
-function buildOkxAttachAlgoOrds(options: { tpPrice?: any; slPrice?: any }) {
+function buildBinanceAttachAlgoOrds(options: { tpPrice?: any; slPrice?: any }) {
   const attachAlgo: Record<string, any> = {};
   if (options.tpPrice !== undefined && options.tpPrice !== null && String(options.tpPrice).trim() !== "") {
     attachAlgo.tpTriggerPx = String(options.tpPrice);
@@ -697,7 +713,7 @@ function buildOkxAttachAlgoOrds(options: { tpPrice?: any; slPrice?: any }) {
   return [attachAlgo];
 }
 
-function parseOkxErrorDetails(errorOrResponse: any) {
+function parseBinanceErrorDetails(errorOrResponse: any) {
   const candidates = [
     errorOrResponse?.response?.data,
     errorOrResponse?.response,
@@ -716,41 +732,41 @@ function parseOkxErrorDetails(errorOrResponse: any) {
   for (const candidate of candidates) {
     if (!candidate || typeof candidate !== "object") continue;
     const row = Array.isArray(candidate?.data) ? candidate.data[0] : candidate?.data;
-    const okxCode = candidate?.code !== undefined ? String(candidate.code) : undefined;
-    const okxMsg = candidate?.msg !== undefined ? String(candidate.msg) : undefined;
-    const okxSCode = row?.sCode !== undefined ? String(row.sCode) : undefined;
-    const okxSMsg = row?.sMsg !== undefined ? String(row.sMsg) : undefined;
-    if (okxCode || okxMsg || okxSCode || okxSMsg) {
+    const binanceCode = candidate?.code !== undefined ? String(candidate.code) : undefined;
+    const binanceMsg = candidate?.msg !== undefined ? String(candidate.msg) : undefined;
+    const binanceSCode = row?.sCode !== undefined ? String(row.sCode) : undefined;
+    const binanceSMsg = row?.sMsg !== undefined ? String(row.sMsg) : undefined;
+    if (binanceCode || binanceMsg || binanceSCode || binanceSMsg) {
       return {
-        okxCode,
-        okxMsg,
-        okxSCode,
-        okxSMsg,
-        okxResponse: candidate,
+        binanceCode,
+        binanceMsg,
+        binanceSCode,
+        binanceSMsg,
+        binanceResponse: candidate,
       };
     }
   }
 
   return {
-    okxCode: undefined,
-    okxMsg: undefined,
-    okxSCode: undefined,
-    okxSMsg: undefined,
-    okxResponse: undefined,
+    binanceCode: undefined,
+    binanceMsg: undefined,
+    binanceSCode: undefined,
+    binanceSMsg: undefined,
+    binanceResponse: undefined,
   };
 }
 
-function okxBar(timeframe: string) {
+function exchangeBar(timeframe: string) {
   const normalized = String(timeframe || "1h").toLowerCase();
-  if (normalized === "1d") return "1D";
-  if (normalized === "1w") return "1W";
-  if (normalized === "4h") return "4H";
+  if (normalized === "1d") return "1d";
+  if (normalized === "1w") return "1w";
+  if (normalized === "4h") return "4h";
   if (normalized === "15m") return "15m";
-  return "1H";
+  return "1h";
 }
 
-async function okxPublicGet(pathname: string, params: Record<string, any>) {
-  const request = async (useProxy: boolean) => axios.get(`https://www.okx.com${pathname}`, {
+async function binancePublicGet(pathname: string, params: Record<string, any>) {
+  const request = async (useProxy: boolean) => axios.get(`https://www.binance.com${pathname}`, {
     params,
     timeout: 10000,
     headers: { "User-Agent": "CryptoQuantAI/1.0" },
@@ -780,7 +796,7 @@ async function okxPublicGet(pathname: string, params: Record<string, any>) {
   return response.data?.data || [];
 }
 
-async function probeOkxPublicApiForAutoTrading() {
+async function probeBinancePublicApiForAutoTrading() {
   const requestOptions: any = {
     timeout: 8000,
     headers: { "User-Agent": "CryptoQuantAI/1.0" },
@@ -791,15 +807,15 @@ async function probeOkxPublicApiForAutoTrading() {
     requestOptions.proxy = false;
   }
 
-  const response = await axios.get("https://www.okx.com/api/v5/public/time", requestOptions);
-  if (response.data?.code && String(response.data.code) !== "0") {
-    throw new Error(response.data?.msg || "OKX public API returned an error");
+  const response = await axios.get("https://fapi.binance.com/fapi/v1/time", requestOptions);
+  if (!Number.isFinite(Number(response.data?.serverTime))) {
+    throw new Error("Binance USD-M public API returned an invalid time response");
   }
   return true;
 }
 
 function formatExchangeConnectivityError(error: any) {
-  return error?.cause?.message || error?.message || String(error || "OKX connectivity check failed");
+  return error?.cause?.message || error?.message || String(error || "Binance connectivity check failed");
 }
 
 function isExchangeConnectivityFailure(error: any) {
@@ -830,7 +846,7 @@ function failAutoTradingPreflight(message: string, code: string) {
   throw requestError(503, message, buildAutoTradingPreflightPayload(message, code));
 }
 
-async function assertAutoTradingExchangeReady(credentials?: Required<OkxCredentials>, sandbox = false) {
+async function assertAutoTradingExchangeReady(credentials?: ResolvedBinanceCredentials, sandbox = false) {
   let proxyReachable: boolean | null = null;
   let proxyReason: string | null = null;
 
@@ -842,8 +858,8 @@ async function assertAutoTradingExchangeReady(credentials?: Required<OkxCredenti
       if (!proxyReachable) {
         proxyReason = `Proxy listener ${parsed.host} is not reachable`;
         markExchangeConnectivityFailure(proxyReason, {
-          okxPublic: false,
-          okxPrivate: false,
+          binancePublic: false,
+          binancePrivate: false,
           proxy: getExchangeProxyStatus(false, proxyReason),
         });
         failAutoTradingPreflight(
@@ -856,8 +872,8 @@ async function assertAutoTradingExchangeReady(credentials?: Required<OkxCredenti
       if (error?.statusCode) throw error;
       proxyReason = `Invalid EXCHANGE_PROXY_URL: ${formatExchangeConnectivityError(error)}`;
       markExchangeConnectivityFailure(proxyReason, {
-        okxPublic: false,
-        okxPrivate: false,
+        binancePublic: false,
+        binancePrivate: false,
         proxy: getExchangeProxyStatus(false, proxyReason),
       });
       failAutoTradingPreflight(proxyReason, "EXCHANGE_PROXY_INVALID");
@@ -867,21 +883,21 @@ async function assertAutoTradingExchangeReady(credentials?: Required<OkxCredenti
   }
 
   try {
-    await withAutoTradingDataRetry("OKX public API preflight", () => probeOkxPublicApiForAutoTrading());
+    await withAutoTradingDataRetry("Binance public API preflight", () => probeBinancePublicApiForAutoTrading());
     markExchangeConnectivitySuccess({
-      okxPublic: true,
+      binancePublic: true,
       proxy: getExchangeProxyStatus(proxyReachable, proxyReason),
     });
   } catch (error: any) {
     const reason = formatExchangeConnectivityError(error);
     markExchangeConnectivityFailure(error, {
-      okxPublic: false,
-      okxPrivate: false,
+      binancePublic: false,
+      binancePrivate: false,
       proxy: getExchangeProxyStatus(proxyReachable, proxyReason),
     });
     failAutoTradingPreflight(
-      `OKX public API is not reachable before auto-trading start: ${reason}`,
-      "OKX_PUBLIC_UNREACHABLE"
+      `Binance public API is not reachable before auto-trading start: ${reason}`,
+      "Binance_PUBLIC_UNREACHABLE"
     );
   }
 
@@ -890,20 +906,20 @@ async function assertAutoTradingExchangeReady(credentials?: Required<OkxCredenti
   try {
     await fetchPrivateBalance(credentials, sandbox, true);
     markExchangeConnectivitySuccess({
-      okxPublic: true,
-      okxPrivate: true,
+      binancePublic: true,
+      binancePrivate: true,
       proxy: getExchangeProxyStatus(proxyReachable, proxyReason),
     });
   } catch (error: any) {
     const reason = formatExchangeConnectivityError(error);
     markExchangeConnectivityFailure(error, {
-      okxPublic: true,
-      okxPrivate: false,
+      binancePublic: true,
+      binancePrivate: false,
       proxy: getExchangeProxyStatus(proxyReachable, proxyReason),
     });
     failAutoTradingPreflight(
-      `OKX private account API is not reachable before auto-trading start: ${reason}`,
-      "OKX_PRIVATE_UNREACHABLE"
+      `Binance private account API is not reachable before auto-trading start: ${reason}`,
+      "Binance_PRIVATE_UNREACHABLE"
     );
   }
 }
@@ -1397,9 +1413,27 @@ const TP_MANAGER_MIN_PRICE_PCT = 0.002;
 const TP_MANAGER_MIN_R_MULTIPLIER = 0.25;
 
 function sanitizeAutoTradingRiskConfig(input: Partial<AutoTradingRiskConfig> | undefined): AutoTradingRiskConfig {
-  return {
+  const merged = {
     ...DEFAULT_AUTO_TRADING_RISK_CONFIG,
     ...(input || {}),
+  };
+  return {
+    ...merged,
+    stopLoss: Math.min(20, Math.max(0.1, Number(merged.stopLoss) || DEFAULT_AUTO_TRADING_RISK_CONFIG.stopLoss)),
+    takeProfit: Math.min(50, Math.max(0.1, Number(merged.takeProfit) || DEFAULT_AUTO_TRADING_RISK_CONFIG.takeProfit)),
+    maxPosition: Math.min(100, Math.max(0.1, Number(merged.maxPosition) || DEFAULT_AUTO_TRADING_RISK_CONFIG.maxPosition)),
+    leverage: Math.min(20, Math.max(1, Number(merged.leverage) || DEFAULT_AUTO_TRADING_RISK_CONFIG.leverage)),
+    dailyLossLimit: Math.min(50, Math.max(0.1, Number(merged.dailyLossLimit) || DEFAULT_AUTO_TRADING_RISK_CONFIG.dailyLossLimit)),
+    maxConsecutiveLosses: Math.min(20, Math.max(1, Math.floor(Number(merged.maxConsecutiveLosses) || DEFAULT_AUTO_TRADING_RISK_CONFIG.maxConsecutiveLosses))),
+    maxPositionPerSymbol: Math.min(100, Math.max(0.1, Number(merged.maxPositionPerSymbol) || DEFAULT_AUTO_TRADING_RISK_CONFIG.maxPositionPerSymbol)),
+    maxTotalLeverage: Math.min(50, Math.max(1, Number(merged.maxTotalLeverage) || DEFAULT_AUTO_TRADING_RISK_CONFIG.maxTotalLeverage)),
+    maxRiskPerSignal: Math.min(10, Math.max(0.01, Number(merged.maxRiskPerSignal) || DEFAULT_AUTO_TRADING_RISK_CONFIG.maxRiskPerSignal)),
+    volatilityThreshold: Math.min(20, Math.max(0.01, Number(merged.volatilityThreshold) || DEFAULT_AUTO_TRADING_RISK_CONFIG.volatilityThreshold)),
+    fundingRateThreshold: Math.min(5, Math.max(0.001, Number(merged.fundingRateThreshold) || DEFAULT_AUTO_TRADING_RISK_CONFIG.fundingRateThreshold)),
+    autoTradeThreshold: Math.min(99, Math.max(50, Number(merged.autoTradeThreshold) || DEFAULT_AUTO_TRADING_RISK_CONFIG.autoTradeThreshold)),
+    shadowMode: Boolean(merged.shadowMode),
+    debugForceSignal: Boolean(merged.debugForceSignal),
+    estimatedFeeRate: Math.min(2, Math.max(0, Number(merged.estimatedFeeRate) || DEFAULT_AUTO_TRADING_RISK_CONFIG.estimatedFeeRate)),
   };
 }
 
@@ -1606,7 +1640,7 @@ function floorToStep(value: number, step: number) {
   return Number((Math.floor(value / step) * step).toFixed(decimals));
 }
 
-function normalizeOkxBalance(balance: any) {
+function normalizeBinanceBalance(balance: any) {
   const account = balance?.info?.data?.[0] || {};
   const details = Array.isArray(account.details) ? account.details : [];
   const usdt = details.find((item: any) => String(item?.ccy || "").toUpperCase() === "USDT") || {};
@@ -1644,7 +1678,7 @@ function normalizeOkxBalance(balance: any) {
   };
 }
 
-function normalizeOkxPosition(position: any) {
+function normalizeBinancePosition(position: any) {
   const info = position?.info || {};
   const rawContracts = [position?.contracts, info.pos, info.availPos]
     .map(normalizeNumber)
@@ -1693,62 +1727,50 @@ function countActivePositions(positions: any[]) {
 }
 
 function toModeLabel(sandbox: boolean) {
-  return sandbox ? "okx-demo" : "okx-live";
+  return sandbox ? "binance-testnet" : "binance-live";
 }
 
 async function fetchPublicTickerSnapshot(symbol: string) {
-  const instId = toOkxSwapInstId(symbol);
-  return cachedPublicMarket(`ticker:${instId}`, 3000, async () => {
-    const [raw] = await okxPublicGet("/api/v5/market/ticker", { instId });
-    const last = Number(raw?.last || 0);
-    const open = Number(raw?.open24h || last);
-    return {
+  const marketSymbol = toCcxtSymbol(symbol);
+  return cachedPublicMarket(`ticker:${marketSymbol}`, 3000, async () => {
+    const ticker = await runWithExchangeProxyFallback<any>(publicExchange, () => publicExchange.fetchTicker(marketSymbol));
+    return normalizeTicker(symbol, ticker) || {
       symbol: normalizeDisplaySymbol(symbol),
-      timestamp: Number(raw?.ts || Date.now()),
-      datetime: new Date(Number(raw?.ts || Date.now())).toISOString(),
-      high: Number(raw?.high24h || last),
-      low: Number(raw?.low24h || last),
-      bid: Number(raw?.bidPx || 0),
-      bidVolume: Number(raw?.bidSz || 0),
-      ask: Number(raw?.askPx || 0),
-      askVolume: Number(raw?.askSz || 0),
-      open,
-      close: last,
-      last,
-      change: last - open,
-      percentage: open ? ((last - open) / open) * 100 : 0,
-      baseVolume: Number(raw?.vol24h || 0),
-      volume: Number(raw?.vol24h || 0),
-      info: raw
+      last: firstNumber(ticker?.last, ticker?.close),
+      percentage: firstNumber(ticker?.percentage),
+      high: firstNumber(ticker?.high),
+      low: firstNumber(ticker?.low),
+      volume: firstNumber(ticker?.baseVolume, ticker?.quoteVolume),
+      info: ticker,
     };
   });
 }
 
 async function fetchPublicOrderBookSnapshot(symbol: string) {
-  const instId = toOkxSwapInstId(symbol);
-  return cachedPublicMarket(`orderbook:${instId}`, 3000, async () => {
-    const [raw] = await okxPublicGet("/api/v5/market/books", { instId, sz: 20 });
+  const marketSymbol = toCcxtSymbol(symbol);
+  return cachedPublicMarket(`orderbook:${marketSymbol}`, 3000, async () => {
+    const orderbook = await runWithExchangeProxyFallback<any>(publicExchange, () => publicExchange.fetchOrderBook(marketSymbol, 20));
     return {
       symbol: normalizeDisplaySymbol(symbol),
-      timestamp: Number(raw?.ts || Date.now()),
-      datetime: new Date(Number(raw?.ts || Date.now())).toISOString(),
-      bids: (raw?.bids || []).map((row: string[]) => [Number(row[0]), Number(row[1])]),
-      asks: (raw?.asks || []).map((row: string[]) => [Number(row[0]), Number(row[1])]),
-      info: raw
+      timestamp: Number(orderbook?.timestamp || Date.now()),
+      datetime: new Date(Number(orderbook?.timestamp || Date.now())).toISOString(),
+      bids: (orderbook?.bids || []).map((row: number[]) => [Number(row[0]), Number(row[1])]),
+      asks: (orderbook?.asks || []).map((row: number[]) => [Number(row[0]), Number(row[1])]),
+      info: orderbook?.info || orderbook,
     } as RuntimeOrderBook & { symbol: string; timestamp: number; datetime: string; info: any };
   });
 }
 
 async function fetchPublicFundingSnapshot(symbol: string) {
-  const instId = toOkxSwapInstId(symbol);
-  return cachedPublicMarket(`funding:${instId}`, 60000, async () => {
-    const [raw] = await okxPublicGet("/api/v5/public/funding-rate", { instId });
+  const marketSymbol = toCcxtSymbol(symbol);
+  return cachedPublicMarket(`funding:${marketSymbol}`, 60000, async () => {
+    const raw = await runWithExchangeProxyFallback<any>(publicExchange, () => publicExchange.fetchFundingRate(marketSymbol));
     return {
       symbol: normalizeDisplaySymbol(symbol),
-      fundingRate: Number(raw?.fundingRate || 0),
+      fundingRate: Number(raw?.fundingRate || raw?.info?.lastFundingRate || 0),
       nextFundingRate: Number(raw?.nextFundingRate || 0),
-      fundingTimestamp: Number(raw?.fundingTime || 0),
-      nextFundingTime: Number(raw?.nextFundingTime || 0),
+      fundingTimestamp: Number(raw?.fundingTimestamp || raw?.timestamp || 0),
+      nextFundingTime: Number(raw?.nextFundingTimestamp || raw?.info?.nextFundingTime || 0),
       timestamp: Date.now(),
       info: raw
     };
@@ -1756,12 +1778,10 @@ async function fetchPublicFundingSnapshot(symbol: string) {
 }
 
 async function fetchPublicOhlcvSnapshot(symbol: string, timeframe = "1h", limit = 120) {
-  const instId = toOkxSwapInstId(symbol);
-  return cachedPublicMarket(`ohlcv:${instId}:${timeframe}:${limit}`, 60000, async () => {
-    const rows = await okxPublicGet("/api/v5/market/candles", { instId, bar: okxBar(timeframe), limit });
-    return rows
-      .map((row: string[]) => [Number(row[0]), Number(row[1]), Number(row[2]), Number(row[3]), Number(row[4]), Number(row[5])])
-      .sort((a: number[], b: number[]) => a[0] - b[0]);
+  const marketSymbol = toCcxtSymbol(symbol);
+  return cachedPublicMarket(`ohlcv:${marketSymbol}:${timeframe}:${limit}`, 60000, async () => {
+    const rows = await runWithExchangeProxyFallback<any[]>(publicExchange, () => publicExchange.fetchOHLCV(marketSymbol, exchangeBar(timeframe), undefined, limit));
+    return rows.map((row: any[]) => [Number(row[0]), Number(row[1]), Number(row[2]), Number(row[3]), Number(row[4]), Number(row[5])]);
   });
 }
 
@@ -1777,31 +1797,31 @@ async function fetchPublicMarketBundle(symbol: string, timeframe: string, limit 
 
 async function fetchPublicMarketBundleWithAutoRetry(symbol: string, timeframe: string, limit = 120) {
   return withAutoTradingDataRetry(
-    `OKX market data ${symbol} ${timeframe}`,
+    `Binance market data ${symbol} ${timeframe}`,
     () => fetchPublicMarketBundle(symbol, timeframe, limit)
   );
 }
 
-async function fetchPrivateBalance(credentials: Required<OkxCredentials>, sandbox: boolean, autoRetry = false) {
+async function fetchPrivateBalance(credentials: ResolvedBinanceCredentials, sandbox: boolean, autoRetry = false) {
   const exchange = getPrivateExchange(credentials.apiKey, credentials.secret, credentials.password, sandbox);
   await prepareExchange(exchange);
   const operation = () => runWithExchangeProxyFallback(exchange, () => exchange.fetchBalance());
   const balance = autoRetry
-    ? await withAutoTradingDataRetry("OKX private balance", operation)
+    ? await withAutoTradingDataRetry("Binance private balance", operation)
     : await operation();
-  if (autoRetry) markExchangeConnectivitySuccess({ okxPrivate: true });
-  return normalizeOkxBalance(balance);
+  if (autoRetry) markExchangeConnectivitySuccess({ binancePrivate: true });
+  return normalizeBinanceBalance(balance);
 }
 
-async function fetchPrivatePositions(credentials: Required<OkxCredentials>, sandbox: boolean, autoRetry = false) {
+async function fetchPrivatePositions(credentials: ResolvedBinanceCredentials, sandbox: boolean, autoRetry = false) {
   const exchange = getPrivateExchange(credentials.apiKey, credentials.secret, credentials.password, sandbox);
   await prepareExchange(exchange);
-  const operation = () => runWithExchangeProxyFallback<any[]>(exchange, () => exchange.fetchPositions(undefined, { instType: "SWAP" }));
+  const operation = () => runWithExchangeProxyFallback<any[]>(exchange, () => exchange.fetchPositions());
   const positions = autoRetry
-    ? await withAutoTradingDataRetry("OKX private positions", operation)
+    ? await withAutoTradingDataRetry("Binance private positions", operation)
     : await operation();
-  if (autoRetry) markExchangeConnectivitySuccess({ okxPrivate: true });
-  return positions.map(normalizeOkxPosition).filter((p: any) => Math.abs(Number(p.contracts || 0)) > 0);
+  if (autoRetry) markExchangeConnectivitySuccess({ binancePrivate: true });
+  return positions.map(normalizeBinancePosition).filter((p: any) => Math.abs(Number(p.contracts || 0)) > 0);
 }
 
 function normalizeTimestamp(value: any) {
@@ -2014,7 +2034,7 @@ function recordTrade(row: any) {
     symbol: String(row.symbol || "UNKNOWN"),
     side: String(row.side || "UNKNOWN").toUpperCase(),
     status: String(row.status || "open").toLowerCase(),
-    mode: String(row.mode || (row.sandbox ? "okx-demo" : "okx-live")),
+    mode: String(row.mode || (row.sandbox ? "binance-testnet" : "binance-live")),
     source: row.source || null,
     strategy_id: row.strategyId || row.strategy_id || row.strategy || null,
     amount: normalizeNumber(row.amount ?? row.contracts),
@@ -2758,49 +2778,54 @@ const portfolioReturnCache = new Map<string, PortfolioReturnCacheEntry>();
 
 function portfolioCredentialError(mode: PortfolioReturnMode) {
   return mode === "demo"
-    ? "OKX 模拟盘凭据缺失，无法读取真实账单收益。请先在设置中配置 OKX 模拟盘 API。"
-    : "OKX 实盘凭据缺失，无法读取真实账单收益。请先在设置中配置 OKX 实盘 API。";
+    ? "Binance 模拟盘凭据缺失，无法读取真实账单收益。请先在设置中配置 Binance 模拟盘 API。"
+    : "Binance 实盘凭据缺失，无法读取真实账单收益。请先在设置中配置 Binance 实盘 API。";
 }
 
-function normalizeOkxPortfolioBill(row: any, mode: PortfolioReturnMode): PortfolioReturnBillInput {
-  const timestamp = firstNumber(row.ts, row.uTime, row.cTime);
+function normalizeBinancePortfolioBill(row: any, mode: PortfolioReturnMode): PortfolioReturnBillInput {
+  const info = row?.info || {};
+  const type = row.type || info.incomeType;
+  const amount = firstNumber(row.amount, info.income);
+  const isCommission = String(type || "").toUpperCase().includes("COMMISSION");
+  const timestamp = firstNumber(row.timestamp, info.time, row.ts, row.uTime, row.cTime);
   return {
     ...row,
-    id: row.billId || row.ordId || `${timestamp}_${row.type || ""}_${row.subType || ""}`,
+    id: row.id || info.tranId || info.tradeId || `${timestamp}_${type || ""}_${info.symbol || ""}`,
     mode,
     timestamp,
-    pnl: firstNumber(row.pnl),
-    fee: firstNumber(row.fee),
-    balanceChange: firstNumber(row.balChg),
-    type: row.type,
-    subType: row.subType,
-    ccy: row.ccy,
-    symbol: row.instId,
+    pnl: isCommission ? 0 : firstNumber(row.pnl, row.realizedPnl, amount),
+    fee: isCommission ? amount : firstNumber(row.fee),
+    balanceChange: firstNumber(row.balanceChange, row.balChg, amount),
+    type,
+    subType: row.subType || info.incomeType,
+    ccy: row.currency || row.ccy || info.asset,
+    symbol: row.symbol || info.symbol,
     rawJson: JSON.stringify(row),
   };
 }
 
 async function fetchPortfolioAccountBills(
-  credentials: Required<OkxCredentials>,
+  credentials: ResolvedBinanceCredentials,
   sandbox: boolean,
   mode: PortfolioReturnMode,
   limit: number
 ) {
   const exchange = getPrivateExchange(credentials.apiKey, credentials.secret, credentials.password, sandbox);
   await prepareExchange(exchange);
-  const response = await runWithExchangeProxyFallback<any>(exchange, () => (exchange as any).privateGetAccountBills({
-    ccy: "USDT",
-    limit: String(Math.min(100, Math.max(1, limit))),
-  }));
-  const rawRows = Array.isArray(response?.data) ? response.data : [];
+  const rawRows = await runWithExchangeProxyFallback<any[]>(exchange, () => (exchange as any).fetchLedger(
+    "USDT",
+    undefined,
+    Math.min(1000, Math.max(1, limit)),
+    { type: "future" }
+  ));
   return rawRows
-    .map((row: any) => normalizeOkxPortfolioBill(row, mode))
+    .map((row: any) => normalizeBinancePortfolioBill(row, mode))
     .filter((row: any) => Number.isFinite(Number(row.timestamp)) && Number(row.timestamp) > 0);
 }
 
 async function fetchPortfolioExchangeReturns(mode: PortfolioReturnMode, limit: number) {
   const sandbox = mode === "demo";
-  const credentials = resolveOkxCredentials({}, sandbox);
+  const credentials = resolveBinanceCredentials({}, sandbox);
   if (!credentials) {
     const error = new Error(portfolioCredentialError(mode)) as Error & { status?: number };
     error.status = 400;
@@ -2819,7 +2844,7 @@ async function fetchPortfolioExchangeReturns(mode: PortfolioReturnMode, limit: n
 }
 
 function formatPortfolioReturnSourceError(error: any) {
-  return error?.message || String(error || "OKX 账单读取失败");
+  return error?.message || String(error || "Binance 账单读取失败");
 }
 
 function getFreshPortfolioReturnCachedResponse(requestKey: string, now: number) {
@@ -2834,7 +2859,7 @@ function getFreshPortfolioReturnCachedResponse(requestKey: string, now: number) 
 function getStalePortfolioReturnCachedResponse(requestKey: string, error: any, now: number) {
   const cached = portfolioReturnCache.get(requestKey);
   if (!isUsableStalePortfolioReturnCache(cached, now, PORTFOLIO_RETURNS_STALE_MAX_AGE_MS)) return null;
-  const message = `OKX 账单刷新失败，当前显示上次成功快照：${formatPortfolioReturnSourceError(error)}`;
+  const message = `Binance 账单刷新失败，当前显示上次成功快照：${formatPortfolioReturnSourceError(error)}`;
   return withPortfolioReturnSourceStatus(
     cached!.analytics,
     createPortfolioReturnStaleStatus(cached!.analytics, message, now)
@@ -2999,11 +3024,11 @@ function isPublicApi(req: express.Request) {
   if (req.method === "GET" && req.path === "/config/status") return true;
   if (req.method === "GET" && req.path === "/macro") return true;
   if (req.method === "GET" && (
-    req.path.startsWith("/okx/ticker/") ||
-    req.path.startsWith("/okx/orderbook/") ||
-    req.path === "/okx/tickers" ||
-    req.path.startsWith("/okx/ohlcv/") ||
-    req.path.startsWith("/okx/funding/")
+    req.path.startsWith("/binance/ticker/") ||
+    req.path.startsWith("/binance/orderbook/") ||
+    req.path === "/binance/tickers" ||
+    req.path.startsWith("/binance/ohlcv/") ||
+    req.path.startsWith("/binance/funding/")
   )) return true;
   return false;
 }
@@ -3020,9 +3045,15 @@ function requireOperator(req: express.Request, res: express.Response, next: expr
 }
 
 // --- Encrypted Credential Store ---
-type OkxCredentials = {
+type BinanceCredentials = {
   apiKey?: string;
   secret?: string;
+  password?: string;
+};
+
+type ResolvedBinanceCredentials = {
+  apiKey: string;
+  secret: string;
   password?: string;
 };
 
@@ -3035,8 +3066,8 @@ type AiProxyCredentials = {
 };
 
 type CredentialStore = {
-  okx?: OkxCredentials;
-  okxDemo?: OkxCredentials;
+  binance?: BinanceCredentials;
+  binanceTestnet?: BinanceCredentials;
   ai?: AiProxyCredentials;
 };
 
@@ -3046,8 +3077,8 @@ function hasText(value: unknown): value is string {
   return typeof value === "string" && value.trim().length > 0;
 }
 
-function hasOkxCredentials(credentials?: OkxCredentials) {
-  return !!(hasText(credentials?.apiKey) && hasText(credentials?.secret) && hasText(credentials?.password));
+function hasBinanceCredentials(credentials?: BinanceCredentials) {
+  return !!(hasText(credentials?.apiKey) && hasText(credentials?.secret));
 }
 
 function hasAiCredentials(credentials?: AiProxyCredentials) {
@@ -3062,24 +3093,22 @@ function envText(...names: string[]) {
   return undefined;
 }
 
-function getOkxEnvCredentials(sandbox: boolean): OkxCredentials {
+function getBinanceEnvCredentials(sandbox: boolean): BinanceCredentials {
   return sandbox
     ? {
-        apiKey: envText("OKX_DEMO_API_KEY", "OKX_SIM_API_KEY", "OKX_PAPER_API_KEY"),
-        secret: envText("OKX_DEMO_SECRET_KEY", "OKX_DEMO_SECRET", "OKX_SIM_SECRET_KEY", "OKX_PAPER_SECRET_KEY"),
-        password: envText("OKX_DEMO_PASSPHRASE", "OKX_DEMO_PASSWORD", "OKX_DEMO_PASS", "OKX_SIM_PASSPHRASE", "OKX_PAPER_PASSPHRASE"),
+        apiKey: envText("BINANCE_TESTNET_API_KEY", "BINANCE_DEMO_API_KEY"),
+        secret: envText("BINANCE_TESTNET_SECRET_KEY", "BINANCE_DEMO_SECRET_KEY"),
       }
     : {
-        apiKey: envText("OKX_API_KEY", "OKX_LIVE_API_KEY"),
-        secret: envText("OKX_SECRET_KEY", "OKX_SECRET", "OKX_LIVE_SECRET_KEY"),
-        password: envText("OKX_PASSPHRASE", "OKX_PASSWORD", "OKX_PASS", "OKX_LIVE_PASSPHRASE"),
+        apiKey: envText("BINANCE_API_KEY", "BINANCE_LIVE_API_KEY"),
+        secret: envText("BINANCE_SECRET_KEY", "BINANCE_SECRET", "BINANCE_LIVE_SECRET_KEY"),
       };
 }
 
 function getZhipuConfig(task: "decision" | "summary" | "vision" = "decision", body: any = {}) {
   const storedAi = credentialStore.ai || {};
-  const baseUrl = body.proxyUrl || body.zhipuBaseUrl || process.env.ZHIPU_BASE_URL || storedAi.proxyUrl || "https://open.bigmodel.cn/api/paas/v4/chat/completions";
-  const apiKey = body.proxyKey || body.zhipuApiKey || process.env.ZHIPU_API_KEY || storedAi.proxyKey;
+  const baseUrl = process.env.ZHIPU_BASE_URL || storedAi.proxyUrl || "https://open.bigmodel.cn/api/paas/v4/chat/completions";
+  const apiKey = process.env.ZHIPU_API_KEY || storedAi.proxyKey;
   const decisionModel = body.model || process.env.ZHIPU_DECISION_MODEL || storedAi.decisionModel || "glm-4.5-air";
   const summaryModel = body.model || process.env.ZHIPU_SUMMARY_MODEL || storedAi.summaryModel || decisionModel;
   const visionModel = body.model || process.env.ZHIPU_VISION_MODEL || storedAi.visionModel || "glm-4.6v";
@@ -3089,6 +3118,22 @@ function getZhipuConfig(task: "decision" | "summary" | "vision" = "decision", bo
     : `${String(baseUrl).replace(/\/$/, "")}/chat/completions`;
 
   return { endpoint, apiKey, model, baseUrl, decisionModel, summaryModel, visionModel };
+}
+
+function assertAllowedAiEndpoint(endpoint: string) {
+  const allowedHosts = new Set(
+    (process.env.ZHIPU_ALLOWED_HOSTS || "open.bigmodel.cn")
+      .split(",")
+      .map((value) => value.trim().toLowerCase())
+      .filter(Boolean)
+  );
+  const parsed = new URL(endpoint);
+  if (!allowedHosts.has(parsed.hostname.toLowerCase())) {
+    throw requestError(400, `AI endpoint host ${parsed.hostname} is not allowed`, {
+      error: `AI endpoint host ${parsed.hostname} is not allowed`,
+      allowedHosts: Array.from(allowedHosts),
+    });
+  }
 }
 
 async function getCredentialSecret() {
@@ -3168,41 +3213,47 @@ async function persistCredentialStore() {
 }
 
 function sanitizedCredentialStatus() {
-  const envOkxLive = hasOkxCredentials(getOkxEnvCredentials(false));
-  const envOkxDemo = hasOkxCredentials(getOkxEnvCredentials(true));
+  const envBinanceLive = hasBinanceCredentials(getBinanceEnvCredentials(false));
+  const envBinanceDemo = hasBinanceCredentials(getBinanceEnvCredentials(true));
   const envZhipu = !!hasText(process.env.ZHIPU_API_KEY);
-  const storedOkxLive = hasOkxCredentials(credentialStore.okx);
-  const storedOkxDemo = hasOkxCredentials(credentialStore.okxDemo);
+  const storedBinanceLive = hasBinanceCredentials(credentialStore.binance);
+  const storedBinanceDemo = hasBinanceCredentials(credentialStore.binanceTestnet);
   const storedAiProxy = hasAiCredentials(credentialStore.ai);
 
   return {
-    okx: envOkxLive || storedOkxLive,
-    okxLive: envOkxLive || storedOkxLive,
-    okxDemo: envOkxDemo || storedOkxDemo,
+    binance: envBinanceLive || storedBinanceLive,
+    binanceLive: envBinanceLive || storedBinanceLive,
+    binanceTestnet: envBinanceDemo || storedBinanceDemo,
     ai: envZhipu || storedAiProxy,
     aiProxy: envZhipu || storedAiProxy,
     zhipu: envZhipu || storedAiProxy,
     smtp: !!(process.env.SMTP_USER && process.env.SMTP_PASS),
     sources: {
-      okxLive: envOkxLive ? "env" : storedOkxLive ? "vault" : null,
-      okxDemo: envOkxDemo ? "env" : storedOkxDemo ? "vault" : null,
+      binanceLive: envBinanceLive ? "env" : storedBinanceLive ? "vault" : null,
+      binanceTestnet: envBinanceDemo ? "env" : storedBinanceDemo ? "vault" : null,
       aiProxy: envZhipu ? "env" : storedAiProxy ? "vault" : null,
       smtp: process.env.SMTP_USER && process.env.SMTP_PASS ? "env" : null,
     },
   };
 }
 
-function resolveOkxCredentials(body: any, sandbox: boolean): Required<OkxCredentials> | null {
-  const env = getOkxEnvCredentials(sandbox);
-  const stored = sandbox ? credentialStore.okxDemo : credentialStore.okx;
+function resolveBinanceCredentials(body: any, sandbox: boolean): ResolvedBinanceCredentials | null {
+  const env = getBinanceEnvCredentials(sandbox);
+  const stored = sandbox
+    ? credentialStore.binanceTestnet
+    : credentialStore.binance;
   const credentials = {
     apiKey: body?.apiKey || env.apiKey || stored?.apiKey,
     secret: body?.secret || env.secret || stored?.secret,
     password: body?.password || env.password || stored?.password,
   };
 
-  if (!hasOkxCredentials(credentials)) return null;
-  return credentials as Required<OkxCredentials>;
+  if (!hasBinanceCredentials(credentials)) return null;
+  return {
+    apiKey: credentials.apiKey!,
+    secret: credentials.secret!,
+    password: credentials.password,
+  };
 }
 
 function mergeText<T extends Record<string, any>>(current: T | undefined, next: Partial<T>) {
@@ -3215,12 +3266,12 @@ function mergeText<T extends Record<string, any>>(current: T | undefined, next: 
   return merged;
 }
 
-const publicExchange = new (ccxt as any).okx({
+const publicExchange = new (ccxt as any).binanceusdm({
   enableRateLimit: true,
-  timeout: OKX_AUTO_DATA_REQUEST_TIMEOUT_MS,
+  timeout: BINANCE_AUTO_DATA_REQUEST_TIMEOUT_MS,
   options: {
-    defaultType: "swap",
-    fetchMarkets: { types: ["swap", "spot"] },
+    defaultType: "future",
+    defaultSubType: "linear",
   },
 });
 applyExchangeProxy(publicExchange);
@@ -3747,7 +3798,7 @@ function requestError(statusCode: number, message: string, payload?: any) {
   return error;
 }
 
-async function submitOkxOrder(orderRequest: any, operator = "unknown") {
+async function submitBinanceOrder(orderRequest: any, operator = "unknown") {
   const {
     symbol,
     side,
@@ -3823,7 +3874,7 @@ async function submitOkxOrder(orderRequest: any, operator = "unknown") {
     raw: { request: orderRequest, operator },
   });
 
-  const credentials = resolveOkxCredentials(orderRequest, isSandbox);
+  const credentials = resolveBinanceCredentials(orderRequest, isSandbox);
   if (!credentials) {
     addOrderLifecycle({
       requestId,
@@ -3837,7 +3888,7 @@ async function submitOkxOrder(orderRequest: any, operator = "unknown") {
       strategyId,
       sandbox: isSandbox,
       operator,
-      details: { reason: "missing_okx_credentials" },
+      details: { reason: "missing_binance_credentials" },
     });
     recordTrade({
       id: clientOrderId || requestId,
@@ -3856,9 +3907,9 @@ async function submitOkxOrder(orderRequest: any, operator = "unknown") {
       orderType: type,
       tpPrice,
       slPrice,
-      raw: { error: "missing_okx_credentials" },
+      raw: { error: "missing_binance_credentials" },
     });
-    throw requestError(400, "Missing OKX credentials", { error: "Missing OKX credentials" });
+    throw requestError(400, "Missing Binance credentials", { error: "Missing Binance credentials" });
   }
 
   try {
@@ -3866,7 +3917,7 @@ async function submitOkxOrder(orderRequest: any, operator = "unknown") {
     await prepareExchange(exchange);
     const exchangeCall = <T,>(fn: () => Promise<T>) => runWithExchangeProxyFallback(exchange, fn);
     await exchangeCall(() => exchange.loadMarkets());
-    const resolvedMarket = await resolveOkxSwapMarket(targetSymbol, exchange);
+    const resolvedMarket = await resolveBinanceSwapMarket(targetSymbol, exchange);
     const minContracts = Math.max(resolvedMarket.minSz, resolvedMarket.lotSz);
     const requestedAmountUsdt = amountType === "usdt" ? Number(amount || 0) : null;
     let effectiveAmountUsdt = requestedAmountUsdt;
@@ -3876,16 +3927,8 @@ async function submitOkxOrder(orderRequest: any, operator = "unknown") {
     let livePriceForSizing: number | null = null;
 
     try {
-      const leverageResponse: any = await retry(() => exchangeCall(() => (exchange as any).privatePostAccountSetLeverage({
-        instId: resolvedMarket.instId,
-        lever: String(leverage),
-        mgnMode: "isolated",
-      })));
-      const leverageRow = unwrapOkxApiRow(leverageResponse);
-      const leverageCode = String(leverageRow?.sCode ?? "0");
-      if (leverageCode !== "0") {
-        throw new Error(leverageRow?.sMsg || leverageResponse?.msg || "Unknown leverage error");
-      }
+      await retry(() => exchangeCall(() => exchange.setMarginMode("isolated", resolvedMarket.resolvedMarketSymbol))).catch(() => null);
+      await retry(() => exchangeCall(() => exchange.setLeverage(Number(leverage), resolvedMarket.resolvedMarketSymbol)));
     } catch (levError: any) {
       throw requestError(500, `Failed to set leverage: ${levError.message}`, {
         error: `Failed to set leverage: ${levError.message}`,
@@ -4005,54 +4048,78 @@ async function submitOkxOrder(orderRequest: any, operator = "unknown") {
     });
 
     const orderPayload: Record<string, any> = {
-      instId: resolvedMarket.instId,
-      tdMode: "isolated",
+      symbol: resolvedMarket.resolvedMarketSymbol,
+      type: type === "limit" ? "limit" : "market",
       side,
-      ordType: type === "limit" ? "limit" : "market",
-      sz: formatToStepString(preciseAmount, resolvedMarket.lotSz),
+      amount: formatToStepString(preciseAmount, resolvedMarket.lotSz),
+      price: type === "limit" ? Number(price) : undefined,
+      params: {},
     };
-    if (clientOrderId) orderPayload.clOrdId = clientOrderId;
+    if (clientOrderId) orderPayload.params.newClientOrderId = clientOrderId;
     if (type === "limit") {
       if (!Number.isFinite(Number(price))) {
         throw requestError(400, "Limit order price is required", { error: "Limit order price is required" });
       }
-      orderPayload.px = String(price);
-    }
-    const attachAlgoOrds = buildOkxAttachAlgoOrds({ tpPrice, slPrice });
-    if (attachAlgoOrds.length > 0) {
-      orderPayload.attachAlgoOrds = attachAlgoOrds;
     }
     orderDiagnostics = {
       ...orderDiagnostics,
       orderPayload,
     };
 
-    const submitResponse: any = await retry(() => exchangeCall(() => (exchange as any).privatePostTradeOrder(orderPayload)));
-    const submitRow = unwrapOkxApiRow(submitResponse);
-    const submitCode = String(submitRow?.sCode ?? "0");
-    if (submitCode !== "0") {
-      const okxDetails = parseOkxErrorDetails(submitResponse);
-      throw requestError(400, submitRow?.sMsg || submitResponse?.msg || "OKX order rejected", {
-        error: submitRow?.sMsg || submitResponse?.msg || "OKX order rejected",
-        code: submitCode,
-        ...orderDiagnostics,
-        ...okxDetails,
-      });
+    const submittedOrder: any = await retry(() => exchangeCall(() => exchange.createOrder(
+      resolvedMarket.resolvedMarketSymbol,
+      orderPayload.type,
+      side,
+      preciseAmount,
+      type === "limit" ? Number(price) : undefined,
+      orderPayload.params,
+    )));
+    const protectionOrders: any[] = [];
+    const closeSide = String(side).toLowerCase() === "buy" ? "sell" : "buy";
+    const protectionBaseParams = {
+      reduceOnly: true,
+      workingType: "MARK_PRICE",
+    };
+    for (const protection of [
+      { label: "take_profit", value: tpPrice, type: "TAKE_PROFIT_MARKET" },
+      { label: "stop_loss", value: slPrice, type: "STOP_MARKET" },
+    ]) {
+      if (protection.value === undefined || protection.value === null || String(protection.value).trim() === "") continue;
+      try {
+        const protectionOrder = await retry(() => exchangeCall(() => exchange.createOrder(
+          resolvedMarket.resolvedMarketSymbol,
+          protection.type,
+          closeSide,
+          preciseAmount,
+          undefined,
+          {
+            ...protectionBaseParams,
+            stopPrice: Number(protection.value),
+            newClientOrderId: `${protection.label}_${Date.now()}_${crypto.randomBytes(3).toString("hex")}`.slice(0, 36),
+          },
+        )));
+        protectionOrders.push({ label: protection.label, order: protectionOrder });
+      } catch (protectionError: any) {
+        protectionOrders.push({
+          label: protection.label,
+          error: protectionError?.message || String(protectionError),
+        });
+      }
     }
-    const orderInfo = attachAlgoOrds.length > 0
-      ? { ...submitRow, attachAlgoOrds }
-      : submitRow;
+    const orderInfo = protectionOrders.length > 0
+      ? { ...submittedOrder, protectionOrders }
+      : submittedOrder;
     const order = {
-      id: String(submitRow?.ordId || "").trim() || undefined,
-      clientOrderId: String(submitRow?.clOrdId || clientOrderId || "").trim() || undefined,
+      id: String(submittedOrder?.id || submittedOrder?.info?.orderId || "").trim() || undefined,
+      clientOrderId: String(submittedOrder?.clientOrderId || submittedOrder?.info?.clientOrderId || clientOrderId || "").trim() || undefined,
       symbol: displaySymbol,
       instId: resolvedMarket.instId,
       type,
       side,
-      price: type === "limit" ? Number(price) : livePriceForSizing,
-      average: type === "limit" ? Number(price) : livePriceForSizing,
+      price: firstNumber(submittedOrder?.price, type === "limit" ? Number(price) : livePriceForSizing),
+      average: firstNumber(submittedOrder?.average, submittedOrder?.price, type === "limit" ? Number(price) : livePriceForSizing),
       amount: preciseAmount,
-      status: "open",
+      status: normalizeBinanceOrderStatus(submittedOrder?.status),
       info: orderInfo,
     };
 
@@ -4101,11 +4168,11 @@ async function submitOkxOrder(orderRequest: any, operator = "unknown") {
 
     if (order?.id || order?.clientOrderId) {
       try {
-        const verifiedRaw: any = await fetchOkxTradeOrderRaw(exchange, exchangeCall, resolvedMarket.instId, {
+        const verifiedRaw: any = await fetchBinanceTradeOrderRaw(exchange, exchangeCall, resolvedMarket.instId, {
           ordId: order.id,
           clOrdId: order.clientOrderId || clientOrderId,
         });
-        const verifiedOrder = normalizeOkxRawOrder(verifiedRaw, resolvedMarket);
+        const verifiedOrder = normalizeBinanceRawOrder(verifiedRaw, resolvedMarket);
         addToAudit(auditStore.orderReceipts, {
           request: {
             requestId,
@@ -4219,13 +4286,13 @@ async function submitOkxOrder(orderRequest: any, operator = "unknown") {
   } catch (error: any) {
     const errMsg = error?.message || String(error || "Unknown Error");
     const errorPayload = error?.payload || {};
-    const okxDetails = parseOkxErrorDetails(error);
+    const binanceDetails = parseBinanceErrorDetails(error);
     const failureDetails = {
       ...orderDiagnostics,
       ...errorPayload,
-      ...okxDetails,
+      ...binanceDetails,
       error: errMsg,
-      code: errorPayload.code || okxDetails.okxSCode || okxDetails.okxCode || error.constructor?.name || "Error",
+      code: errorPayload.code || binanceDetails.binanceSCode || binanceDetails.binanceCode || error.constructor?.name || "Error",
       requestedAmountUsdt: errorPayload.requestedAmountUsdt ?? orderDiagnostics.requestedAmountUsdt ?? (amountType === "usdt" ? Number(amount || 0) : null),
       minRequiredUsdt: errorPayload.minRequiredUsdt ?? orderDiagnostics.minRequiredUsdt ?? null,
       effectiveAmountUsdt: errorPayload.effectiveAmountUsdt ?? orderDiagnostics.effectiveAmountUsdt ?? null,
@@ -4275,7 +4342,7 @@ async function submitOkxOrder(orderRequest: any, operator = "unknown") {
 }
 
 function resolveEngineCredentials(sandbox: boolean) {
-  return resolveOkxCredentials({}, sandbox);
+  return resolveBinanceCredentials({}, sandbox);
 }
 
 function currentMacroSnapshot() {
@@ -4592,6 +4659,35 @@ class TakeProfitManager {
       return;
     }
 
+    const protectionOrders = input.verifiedOrder?.info?.protectionOrders || input.order?.info?.protectionOrders;
+    if (Array.isArray(protectionOrders) && protectionOrders.length > 0) {
+      updateTradeTakeProfitMetadata({
+        id: input.tradeId,
+        tpPrice: initialTpPrice,
+        slPrice,
+        initialTpPrice,
+        currentTpPrice: initialTpPrice,
+        tpAmendCount: 0,
+        tpManagerStatus: "skipped",
+        lastTpManagerReason: "Binance TP/SL protection orders already submitted",
+      });
+      addOrderLifecycle({
+        requestId: input.requestId,
+        clientOrderId: input.clientOrderId,
+        orderId: input.orderId,
+        symbol: normalizedSymbol,
+        side,
+        status: "tp_skipped",
+        source,
+        strategyId: input.strategyId,
+        sandbox: input.sandbox,
+        operator: "tp-manager",
+        details: { reason: "Binance TP/SL protection orders already submitted", protectionOrders },
+      });
+      pushAutoTradingLog(`TP manager skipped ${normalizedSymbol}: Binance protection orders submitted`);
+      return;
+    }
+
     const attached = extractAttachedTpIdentifiers(input.verifiedOrder || input.order);
     const managedOrder: ManagedTakeProfitOrder = {
       id: `tpmgr_${Date.now()}_${crypto.randomBytes(4).toString("hex")}`,
@@ -4696,12 +4792,12 @@ class TakeProfitManager {
   private async refreshAttachedIdentifiers(managedOrder: ManagedTakeProfitOrder, exchange: any, exchangeCall: <T>(fn: () => Promise<T>) => Promise<T>) {
     if ((managedOrder.attachedTpAlgoId || managedOrder.attachedTpAlgoClOrdId) || !managedOrder.orderId) return;
     try {
-      const resolvedMarket = await resolveOkxSwapMarket(managedOrder.symbol, exchange);
-      const refreshedRaw = await fetchOkxTradeOrderRaw(exchange, exchangeCall, resolvedMarket.instId, {
+      const resolvedMarket = await resolveBinanceSwapMarket(managedOrder.symbol, exchange);
+      const refreshedRaw = await fetchBinanceTradeOrderRaw(exchange, exchangeCall, resolvedMarket.instId, {
         ordId: managedOrder.orderId,
         clOrdId: managedOrder.clientOrderId,
       });
-      const refreshed = normalizeOkxRawOrder(refreshedRaw, resolvedMarket);
+      const refreshed = normalizeBinanceRawOrder(refreshedRaw, resolvedMarket);
       const attached = extractAttachedTpIdentifiers(refreshed);
       if (attached.attachedTpAlgoId || attached.attachedTpAlgoClOrdId) {
         managedOrder.attachedTpAlgoId = attached.attachedTpAlgoId;
@@ -4732,7 +4828,7 @@ class TakeProfitManager {
     }
 
     const request: Record<string, any> = {
-      instId: toOkxSwapInstId(managedOrder.symbol),
+      instId: toBinanceSwapInstId(managedOrder.symbol),
       reqId: `tpamend_${Date.now()}_${crypto.randomBytes(4).toString("hex")}`,
       cxlOnFail: false,
       attachAlgoOrds: [attachPayload],
@@ -4785,8 +4881,8 @@ class TakeProfitManager {
         const exchangeCall = <T,>(fn: () => Promise<T>) => runWithExchangeProxyFallback(exchange, fn);
         const positionKey = String(managedOrder.sandbox);
         if (!positionCache.has(positionKey)) {
-          positionCache.set(positionKey, exchangeCall(() => exchange.fetchPositions(undefined, { instType: "SWAP" }))
-            .then((positions: any[]) => positions.map(normalizeOkxPosition)));
+          positionCache.set(positionKey, exchangeCall(() => exchange.fetchPositions())
+            .then((positions: any[]) => positions.map(normalizeBinancePosition)));
         }
         const positions = (await positionCache.get(positionKey)!).filter((item: any) => item.symbol === managedOrder.symbol);
         const matchingPosition = positions.find((item: any) => {
@@ -4958,8 +5054,8 @@ async function runAutoTradingCycle(config: AutoTradingConfig, trigger: "schedule
   const cycleId = `cycle_${startedAt}_${crypto.randomBytes(4).toString("hex")}`;
   const credentials = resolveEngineCredentials(config.sandbox);
   if (!credentials) {
-    throw requestError(400, `Missing OKX credentials for ${config.sandbox ? "demo" : "live"} mode`, {
-      error: `Missing OKX credentials for ${config.sandbox ? "demo" : "live"} mode`
+    throw requestError(400, `Missing Binance credentials for ${config.sandbox ? "demo" : "live"} mode`, {
+      error: `Missing Binance credentials for ${config.sandbox ? "demo" : "live"} mode`
     });
   }
 
@@ -5522,7 +5618,7 @@ async function runAutoTradingCycle(config: AutoTradingConfig, trigger: "schedule
     candidate.trace.steps.push(buildStep("shadow_mode", "skip", "Live execution enabled"));
 
     try {
-      const result = await submitOkxOrder({
+      const result = await submitBinanceOrder({
         symbol: candidate.symbol,
         side,
         amount,
@@ -5648,8 +5744,8 @@ class AutoTradingEngine {
     if (!config) throw requestError(400, "Invalid auto-trading config", { error: "Invalid auto-trading config" });
     const credentials = resolveEngineCredentials(config.sandbox);
     if (!credentials) {
-      throw requestError(400, `Missing OKX credentials for ${config.sandbox ? "demo" : "live"} mode`, {
-        error: `Missing OKX credentials for ${config.sandbox ? "demo" : "live"} mode`
+      throw requestError(400, `Missing Binance credentials for ${config.sandbox ? "demo" : "live"} mode`, {
+        error: `Missing Binance credentials for ${config.sandbox ? "demo" : "live"} mode`
       });
     }
     await assertAutoTradingExchangeReady(credentials, config.sandbox);
@@ -5704,8 +5800,8 @@ class AutoTradingEngine {
     if (this.inFlight) throw requestError(409, "Auto-trading cycle already in progress", { error: "Auto-trading cycle already in progress" });
     const credentials = resolveEngineCredentials(config.sandbox);
     if (!credentials) {
-      throw requestError(400, `Missing OKX credentials for ${config.sandbox ? "demo" : "live"} mode`, {
-        error: `Missing OKX credentials for ${config.sandbox ? "demo" : "live"} mode`
+      throw requestError(400, `Missing Binance credentials for ${config.sandbox ? "demo" : "live"} mode`, {
+        error: `Missing Binance credentials for ${config.sandbox ? "demo" : "live"} mode`
       });
     }
     await assertAutoTradingExchangeReady(credentials, config.sandbox);
@@ -5784,11 +5880,11 @@ class AutoTradingEngine {
       if (keepAlive && !this.stopRequested) {
         if (isExchangeConnectivityFailure(error)) {
           const connectivity = markExchangeConnectivityFailure(error, {
-            okxPrivate: false,
+            binancePrivate: false,
             proxy: getExchangeProxyStatus(),
           });
           const retryDelayMs = Math.max(0, Number(connectivity.nextRetryAt || 0) - Date.now());
-          pushAutoTradingLog(`OKX connection unavailable; auto-trading will retry in ${Math.max(1, Math.round(retryDelayMs / 1000))}s.`);
+          pushAutoTradingLog(`Binance connection unavailable; auto-trading will retry in ${Math.max(1, Math.round(retryDelayMs / 1000))}s.`);
           updateAutoTradingStore({
             state: "error",
             nextRunAt: connectivity.nextRetryAt,
@@ -5909,12 +6005,10 @@ async function startServer() {
   app.post("/api/config/credentials", async (req, res) => {
     try {
       const {
-        okxKey,
-        okxSecret,
-        okxPass,
-        okxDemoKey,
-        okxDemoSecret,
-        okxDemoPass,
+        binanceKey,
+        binanceSecret,
+        binanceTestnetKey,
+        binanceTestnetSecret,
         aiUrl,
         aiKey,
         aiModel,
@@ -5922,15 +6016,13 @@ async function startServer() {
         aiVisionModel,
       } = req.body || {};
 
-      credentialStore.okx = mergeText(credentialStore.okx, {
-        apiKey: okxKey,
-        secret: okxSecret,
-        password: okxPass,
+      credentialStore.binance = mergeText(credentialStore.binance, {
+        apiKey: binanceKey,
+        secret: binanceSecret,
       });
-      credentialStore.okxDemo = mergeText(credentialStore.okxDemo, {
-        apiKey: okxDemoKey,
-        secret: okxDemoSecret,
-        password: okxDemoPass,
+      credentialStore.binanceTestnet = mergeText(credentialStore.binanceTestnet, {
+        apiKey: binanceTestnetKey,
+        secret: binanceTestnetSecret,
       });
       credentialStore.ai = mergeText(credentialStore.ai, {
         proxyUrl: aiUrl,
@@ -6164,7 +6256,7 @@ async function startServer() {
               AND mode = ?
             ORDER BY created_at DESC
             LIMIT 2000
-          `).all(mode === "demo" ? "okx-demo" : "okx-live") as any[];
+          `).all(mode === "demo" ? "binance-testnet" : "binance-live") as any[];
       const shadowOrders = mode === "shadow"
         ? tradingDb.prepare("SELECT * FROM shadow_orders ORDER BY created_at DESC LIMIT 2000").all() as any[]
         : [];
@@ -6180,7 +6272,7 @@ async function startServer() {
           const exchangeReturns = await withTimeout(
             fetchPortfolioExchangeReturns(mode, limit),
             PORTFOLIO_RETURNS_TIMEOUT_MS,
-            `OKX ${mode === "demo" ? "模拟盘" : "实盘"}账单读取超时`
+            `Binance ${mode === "demo" ? "模拟盘" : "实盘"}账单读取超时`
           );
           const fetchedAt = Date.now();
           const analytics = buildPortfolioReturnAnalytics({
@@ -6311,125 +6403,68 @@ async function startServer() {
   });
 
   // API Routes
-  app.post("/api/okx/balance", async (req, res) => {
+  app.post("/api/binance/balance", async (req, res) => {
     const { sandbox = false } = req.body;
     
     const isSandbox = String(sandbox) === 'true' || sandbox === true;
-    const credentials = resolveOkxCredentials(req.body, isSandbox);
+    const credentials = resolveBinanceCredentials(req.body, isSandbox);
 
-    console.log(`[OKX Balance Request] Mode: ${isSandbox ? 'DEMO' : 'REAL'}`);
+    console.log(`[Binance Balance Request] Mode: ${isSandbox ? 'TESTNET' : 'LIVE'}`);
     console.log(`- API Key: ${credentials?.apiKey ? credentials.apiKey.substring(0, 5) + '...' : 'MISSING'}`);
 
     if (!credentials) {
-      return res.status(400).json({ error: "Missing OKX credentials" });
+      return res.status(400).json({ error: "Missing Binance credentials" });
     }
 
     try {
        const exchange = getPrivateExchange(credentials.apiKey, credentials.secret, credentials.password, isSandbox);
        await prepareExchange(exchange);
-       const balance = normalizeOkxBalance(await runWithExchangeProxyFallback(exchange, () => exchange.fetchBalance()));
+       const balance = normalizeBinanceBalance(await runWithExchangeProxyFallback(exchange, () => exchange.fetchBalance()));
        
        // Ensure we have a consistent structure for the frontend
-       // OKX V5 balance is already well-mapped by CCXT, but we can log details
+       // Binance V5 balance is already well-mapped by CCXT, but we can log details
        if (balance.info && balance.info.data && balance.info.data[0]) {
          const details = balance.info.data[0].details || [];
-         console.log(`[OKX Balance] Details count: ${details.length}`);
+         console.log(`[Binance Balance] Details count: ${details.length}`);
        }
        
        res.json(balance);
      } catch (error: any) {
       const errMsg = error?.message || String(error || "Unknown Error");
-      console.error(`[OKX Balance Error] Mode: ${isSandbox ? 'DEMO' : 'REAL'}`, errMsg);
-      if (error.stack) console.error('[OKX Balance Error Stack]', error.stack);
-      const isEnvError = errMsg.includes('50101') || errMsg.includes('APIKey does not match');
-      const hint = isEnvError ? " (璇锋鏌ュ綋鍓嶈处鎴锋ā寮忎笌 API Key 鏄惁鍖归厤锛涙ā鎷熺洏鍜屽疄鐩樺繀椤讳娇鐢ㄥ悇鑷嫭绔嬬殑鍑嵁)" : "";
-      res.status(500).json({ error: `okx ${errMsg}${hint}` });
+      console.error(`[Binance Balance Error] Mode: ${isSandbox ? 'TESTNET' : 'LIVE'}`, errMsg);
+      if (error.stack) console.error('[Binance Balance Error Stack]', error.stack);
+      res.status(500).json({ error: `binance ${errMsg}` });
     }
   });
 
-  app.get("/api/okx/ticker/:symbol", async (req, res) => {
+  app.get("/api/binance/ticker/:symbol", async (req, res) => {
     try {
       const symbolParam = req.params.symbol || "BTC-USDT";
-      const instId = toOkxSwapInstId(symbolParam);
-      const ticker = await cachedPublicMarket(`ticker:${instId}`, 3000, async () => {
-        const [raw] = await okxPublicGet("/api/v5/market/ticker", { instId });
-        const last = Number(raw?.last || 0);
-        const open = Number(raw?.open24h || last);
-        return {
-          symbol: toCcxtLikeSwapSymbol(instId),
-          timestamp: Number(raw?.ts || Date.now()),
-          datetime: new Date(Number(raw?.ts || Date.now())).toISOString(),
-          high: Number(raw?.high24h || last),
-          low: Number(raw?.low24h || last),
-          bid: Number(raw?.bidPx || 0),
-          bidVolume: Number(raw?.bidSz || 0),
-          ask: Number(raw?.askPx || 0),
-          askVolume: Number(raw?.askSz || 0),
-          open,
-          close: last,
-          last,
-          change: last - open,
-          percentage: open ? ((last - open) / open) * 100 : 0,
-          baseVolume: Number(raw?.vol24h || 0),
-          volume: Number(raw?.vol24h || 0),
-          info: raw
-        };
-      });
-      res.json(ticker);
+      res.json(await fetchPublicTickerSnapshot(symbolParam));
     } catch (error: any) {
       console.error('[Ticker Error]', error.message);
       res.status(500).json({ error: error.message });
     }
   });
 
-  app.get("/api/okx/orderbook/:symbol", async (req, res) => {
+  app.get("/api/binance/orderbook/:symbol", async (req, res) => {
     try {
       const symbolParam = req.params.symbol || "BTC-USDT";
-      const instId = toOkxSwapInstId(symbolParam);
-      const orderbook = await cachedPublicMarket(`orderbook:${instId}`, 3000, async () => {
-        const [raw] = await okxPublicGet("/api/v5/market/books", { instId, sz: 20 });
-        return {
-          symbol: toCcxtLikeSwapSymbol(instId),
-          timestamp: Number(raw?.ts || Date.now()),
-          datetime: new Date(Number(raw?.ts || Date.now())).toISOString(),
-          bids: (raw?.bids || []).map((row: string[]) => [Number(row[0]), Number(row[1])]),
-          asks: (raw?.asks || []).map((row: string[]) => [Number(row[0]), Number(row[1])]),
-          info: raw
-        };
-      });
-      res.json(orderbook);
+      res.json(await fetchPublicOrderBookSnapshot(symbolParam));
     } catch (error: any) {
       console.error('[Orderbook Error]', error.message);
       res.status(500).json({ error: error.message });
     }
   });
 
-  app.get("/api/okx/tickers", async (req, res) => {
+  app.get("/api/binance/tickers", async (req, res) => {
     try {
-      const coreInstIds = new Set(["BTC-USDT-SWAP", "ETH-USDT-SWAP", "SOL-USDT-SWAP", "DOGE-USDT-SWAP"]);
       const tickers = await cachedPublicMarket("tickers:core", 10000, async () => {
-        const rows = await okxPublicGet("/api/v5/market/tickers", { instType: "SWAP" });
-        return Object.fromEntries(rows
-          .filter((raw: any) => coreInstIds.has(raw.instId))
-          .map((raw: any) => {
-            const last = Number(raw.last || 0);
-            const open = Number(raw.open24h || last);
-            return [toCcxtLikeSwapSymbol(raw.instId), {
-              symbol: toCcxtLikeSwapSymbol(raw.instId),
-              timestamp: Number(raw.ts || Date.now()),
-              datetime: new Date(Number(raw.ts || Date.now())).toISOString(),
-              high: Number(raw.high24h || last),
-              low: Number(raw.low24h || last),
-              bid: Number(raw.bidPx || 0),
-              ask: Number(raw.askPx || 0),
-              open,
-              close: last,
-              last,
-              percentage: open ? ((last - open) / open) * 100 : 0,
-              baseVolume: Number(raw.vol24h || 0),
-              info: raw
-            }];
-          }));
+        const entries = await Promise.all((AUTO_TRADING_ALLOWED_SYMBOLS as readonly string[]).map(async (symbol) => {
+          const ticker = await fetchPublicTickerSnapshot(symbol);
+          return [toCcxtSymbol(symbol), ticker];
+        }));
+        return Object.fromEntries(entries);
       });
       res.json(tickers);
     } catch (error: any) {
@@ -6437,42 +6472,22 @@ async function startServer() {
     }
   });
 
-  app.get("/api/okx/ohlcv/:symbol", async (req, res) => {
+  app.get("/api/binance/ohlcv/:symbol", async (req, res) => {
     try {
       const symbolParam = req.params.symbol || "BTC-USDT";
-      const instId = toOkxSwapInstId(symbolParam);
       const timeframe = (req.query.t as string) || "1h";
       const limit = Math.min(300, Math.max(24, Number(req.query.limit || 120)));
-      const ohlcv = await cachedPublicMarket(`ohlcv:${instId}:${timeframe}:${limit}`, 60000, async () => {
-        const rows = await okxPublicGet("/api/v5/market/candles", { instId, bar: okxBar(timeframe), limit });
-        return rows
-          .map((row: string[]) => [Number(row[0]), Number(row[1]), Number(row[2]), Number(row[3]), Number(row[4]), Number(row[5])])
-          .sort((a: number[], b: number[]) => a[0] - b[0]);
-      });
-      res.json(ohlcv);
+      res.json(await fetchPublicOhlcvSnapshot(symbolParam, timeframe, limit));
     } catch (error: any) {
       console.error('[OHLCV Error]', error.message);
       res.status(500).json({ error: error.message });
     }
   });
 
-  app.get("/api/okx/funding/:symbol", async (req, res) => {
+  app.get("/api/binance/funding/:symbol", async (req, res) => {
     try {
       const symbolParam = req.params.symbol || "BTC-USDT";
-      const instId = toOkxSwapInstId(symbolParam);
-      const funding = await cachedPublicMarket(`funding:${instId}`, 60000, async () => {
-        const [raw] = await okxPublicGet("/api/v5/public/funding-rate", { instId });
-        return {
-          symbol: toCcxtLikeSwapSymbol(instId),
-          fundingRate: Number(raw?.fundingRate || 0),
-          nextFundingRate: Number(raw?.nextFundingRate || 0),
-          fundingTimestamp: Number(raw?.fundingTime || 0),
-          nextFundingTime: Number(raw?.nextFundingTime || 0),
-          timestamp: Date.now(),
-          info: raw
-        };
-      });
-      res.json(funding);
+      res.json(await fetchPublicFundingSnapshot(symbolParam));
     } catch (error: any) {
       const finalErrMsg = error?.message || "Funding rate fetch failed";
       console.error('[Funding Error]', finalErrMsg);
@@ -6832,8 +6847,8 @@ async function startServer() {
     if (!endpoint || !apiKey) {
       return res.status(400).json({ error: "Missing Zhipu AI configuration" });
     }
-
     try {
+      assertAllowedAiEndpoint(endpoint);
       const body: any = {
         model,
         messages: [
@@ -6882,47 +6897,46 @@ async function startServer() {
     } catch (error: any) {
       const errorData = error.response?.data || error.message;
       console.error("Zhipu AI Error:", JSON.stringify(errorData));
-      res.status(500).json({ error: errorData });
+      res.status(error?.statusCode || 500).json(error?.payload || { error: errorData });
     }
   });
 
-  app.post("/api/okx/positions", async (req, res) => {
+  app.post("/api/binance/positions", async (req, res) => {
     const { sandbox = false } = req.body;
     const isSandbox = String(sandbox) === 'true' || sandbox === true;
-    const credentials = resolveOkxCredentials(req.body, isSandbox);
+    const credentials = resolveBinanceCredentials(req.body, isSandbox);
 
     if (!credentials) {
-      return res.status(400).json({ error: "Missing OKX credentials" });
+      return res.status(400).json({ error: "Missing Binance credentials" });
     }
 
     try {
       const exchange = getPrivateExchange(credentials.apiKey, credentials.secret, credentials.password, isSandbox);
       await prepareExchange(exchange);
-      console.log(`[OKX Positions Request] Mode: ${isSandbox ? 'DEMO' : 'REAL'}`);
+      console.log(`[Binance Positions Request] Mode: ${isSandbox ? 'TESTNET' : 'LIVE'}`);
       
-      // For OKX, we might want to fetch positions for swap specifically if needed
-      const positions = await runWithExchangeProxyFallback<any[]>(exchange, () => exchange.fetchPositions(undefined, { instType: "SWAP" }));
+      const positions = await runWithExchangeProxyFallback<any[]>(exchange, () => exchange.fetchPositions());
       
       const activePositions = positions
-        .map(normalizeOkxPosition)
+        .map(normalizeBinancePosition)
         .filter((p: any) => Math.abs(Number(p.contracts || 0)) > 0);
       
-      console.log(`[OKX Positions] Found ${activePositions.length} active positions`);
+      console.log(`[Binance Positions] Found ${activePositions.length} active positions`);
       res.json(activePositions);
     } catch (error: any) {
       const errMsg = error?.message || String(error || "Unknown Error");
-      console.error(`[OKX Positions Error] Mode: ${isSandbox ? 'DEMO' : 'REAL'}`, errMsg);
+      console.error(`[Binance Positions Error] Mode: ${isSandbox ? 'TESTNET' : 'LIVE'}`, errMsg);
       res.status(500).json({ error: errMsg });
     }
   });
 
-  app.post("/api/okx/history", async (req, res) => {
+  app.post("/api/binance/history", async (req, res) => {
     const { symbol, sandbox = false } = req.body;
     const isSandbox = String(sandbox) === 'true' || sandbox === true;
-    const credentials = resolveOkxCredentials(req.body, isSandbox);
+    const credentials = resolveBinanceCredentials(req.body, isSandbox);
 
     if (!credentials) {
-      return res.status(400).json({ error: "Missing OKX credentials" });
+      return res.status(400).json({ error: "Missing Binance credentials" });
     }
 
     try {
@@ -6931,26 +6945,18 @@ async function startServer() {
       const targetSymbol = symbol || "BTC/USDT";
       const exchangeCall = <T,>(fn: () => Promise<T>) => runWithExchangeProxyFallback(exchange, fn);
       await exchangeCall(() => exchange.loadMarkets());
-      const resolvedMarket = await resolveOkxSwapMarket(targetSymbol, exchange);
+      const resolvedMarket = await resolveBinanceSwapMarket(targetSymbol, exchange);
       console.log(
-        `[OKX History Request] Symbol: ${targetSymbol}, Resolved: ${resolvedMarket.instId}, Mode: ${isSandbox ? 'DEMO' : 'REAL'}`
+        `[Binance History Request] Symbol: ${targetSymbol}, Resolved: ${resolvedMarket.instId}, Mode: ${isSandbox ? 'TESTNET' : 'LIVE'}`
       );
       
       try {
-        const instId = resolvedMarket.instId;
-        const instType = "SWAP";
-
-        const [openOrdersResponse, historyOrdersResponse, archivedOrdersResponse] = await Promise.all([
-          retry(() => exchangeCall(() => (exchange as any).privateGetTradeOrdersPending({ instType, instId, limit: "100" }))),
-          retry(() => exchangeCall(() => (exchange as any).privateGetTradeOrdersHistory({ instType, instId, limit: "100" }))).catch(() => ({ code: "0", data: [] })),
-          retry(() => exchangeCall(() => (exchange as any).privateGetTradeOrdersHistoryArchive({ instType, instId, limit: "100" }))).catch(() => ({ code: "0", data: [] })),
+        const [openOrders, closedOrders] = await Promise.all([
+          retry(() => exchangeCall<any[]>(() => exchange.fetchOpenOrders(resolvedMarket.resolvedMarketSymbol, undefined, 100))).catch(() => [] as any[]),
+          retry(() => exchangeCall<any[]>(() => exchange.fetchClosedOrders(resolvedMarket.resolvedMarketSymbol, undefined, 100))).catch(() => [] as any[]),
         ]);
 
-        const allOrders = [
-          ...unwrapOkxApiRows(openOrdersResponse),
-          ...unwrapOkxApiRows(historyOrdersResponse),
-          ...unwrapOkxApiRows(archivedOrdersResponse),
-        ].map((row: any) => normalizeOkxHistoryOrder(row, resolvedMarket));
+        const allOrders = [...openOrders, ...closedOrders].map((row: any) => normalizeBinanceHistoryOrder(row, resolvedMarket));
 
         const uniqueOrders = Array.from(new Map(allOrders.map((item: any) => [item.id || item.clientOrderId, item])).values())
           .filter((item: any) => item?.id || item?.clientOrderId);
@@ -6958,29 +6964,25 @@ async function startServer() {
 
         res.json(uniqueOrders);
       } catch (e) {
-        console.warn("[OKX History] Primary fetch failed, trying fallback:", e);
-        const fallbackResponse = await retry(() => exchangeCall(() => (exchange as any).privateGetTradeOrdersPending({
-          instType: "SWAP",
-          instId: resolvedMarket.instId,
-          limit: "100",
-        })));
-        const orders = unwrapOkxApiRows(fallbackResponse).map((row: any) => normalizeOkxHistoryOrder(row, resolvedMarket));
+        console.warn("[Binance History] Primary fetch failed, trying fallback:", e);
+        const orders = await retry(() => exchangeCall(() => exchange.fetchOpenOrders(resolvedMarket.resolvedMarketSymbol, undefined, 100)))
+          .then((rows: any[]) => rows.map((row: any) => normalizeBinanceHistoryOrder(row, resolvedMarket)));
         res.json(orders);
       }
     } catch (error: any) {
       const errMsg = error?.message || String(error || "Unknown Error");
-      console.error(`[OKX History Error] Symbol: ${symbol || 'BTC/USDT'}, Mode: ${isSandbox ? 'DEMO' : 'REAL'}`, errMsg);
+      console.error(`[Binance History Error] Symbol: ${symbol || 'BTC/USDT'}, Mode: ${isSandbox ? 'TESTNET' : 'LIVE'}`, errMsg);
       res.status(500).json({ error: errMsg });
     }
   });
 
-  app.post("/api/okx/realized-pnl", async (req, res) => {
+  app.post("/api/binance/realized-pnl", async (req, res) => {
     const { sandbox = false } = req.body;
     const isSandbox = String(sandbox) === 'true' || sandbox === true;
-    const credentials = resolveOkxCredentials(req.body, isSandbox);
+    const credentials = resolveBinanceCredentials(req.body, isSandbox);
 
     if (!credentials) {
-      return res.status(400).json({ error: "Missing OKX credentials" });
+      return res.status(400).json({ error: "Missing Binance credentials" });
     }
 
     try {
@@ -6989,24 +6991,21 @@ async function startServer() {
       const dayStart = new Date();
       dayStart.setHours(0, 0, 0, 0);
       const dayStartMs = dayStart.getTime();
-      const response = await runWithExchangeProxyFallback<any>(exchange, () => (exchange as any).privateGetAccountBills({
-        ccy: "USDT",
-        limit: "100",
-      }));
-      const rawRows = Array.isArray(response?.data) ? response.data : [];
+      const rawRows = await runWithExchangeProxyFallback<any[]>(exchange, () => exchange.fetchMyTrades(undefined, dayStartMs, 100));
       const rows = rawRows.map((row: any) => {
-        const timestamp = firstNumber(row.ts, row.uTime, row.cTime);
-        const pnl = firstNumber(row.pnl);
+        const info = row?.info || {};
+        const timestamp = firstNumber(row.timestamp, info.time);
+        const pnl = firstNumber(info.realizedPnl, row.fee?.cost ? -Math.abs(row.fee.cost) : 0);
         return {
-          id: row.billId || row.ordId || `${timestamp}_${row.type || ""}_${row.subType || ""}`,
+          id: row.id || info.id || info.orderId || `${timestamp}_${info.symbol || ""}`,
           timestamp,
           pnl,
-          fee: firstNumber(row.fee),
-          balanceChange: firstNumber(row.balChg),
+          fee: firstNumber(row.fee?.cost, info.commission),
+          balanceChange: pnl,
           type: row.type,
-          subType: row.subType,
-          ccy: row.ccy,
-          symbol: row.instId,
+          subType: info.buyer ? "buyer" : "seller",
+          ccy: row.fee?.currency || info.commissionAsset || "USDT",
+          symbol: normalizeDisplaySymbol(row.symbol || info.symbol),
         };
       }).filter((row: any) => Number.isFinite(row.timestamp) && row.timestamp > 0);
 
@@ -7016,8 +7015,7 @@ async function startServer() {
       const riskCountRows = realizedRows.filter((row: any) => {
         const type = String(row.type || "");
         const subType = String(row.subType || "");
-        // Funding-fee bills are realized balance changes, but they are not losing trades.
-        return type !== "8" && subType !== "173" && subType !== "174";
+        return type !== "funding" && subType !== "funding";
       });
       const dailyPnL = realizedRows
         .filter((row: any) => row.timestamp >= dayStartMs)
@@ -7041,14 +7039,14 @@ async function startServer() {
       });
     } catch (error: any) {
       const errMsg = error?.message || String(error || "Unknown Error");
-      console.error(`[OKX Realized PnL Error] Mode: ${isSandbox ? 'DEMO' : 'REAL'}`, errMsg);
+      console.error(`[Binance Realized PnL Error] Mode: ${isSandbox ? 'TESTNET' : 'LIVE'}`, errMsg);
       res.status(500).json({ error: errMsg });
     }
   });
 
-  app.post("/api/okx/order", async (req, res) => {
+  app.post("/api/binance/order", async (req, res) => {
     try {
-      const result = await submitOkxOrder(req.body || {}, (req as any).operator?.username || "unknown");
+      const result = await submitBinanceOrder(req.body || {}, (req as any).operator?.username || "unknown");
       return res.json(result);
     } catch (error: any) {
       return res.status(error?.statusCode || 500).json(error?.payload || {
@@ -7114,7 +7112,7 @@ async function startServer() {
     });
   }
 
-  app.listen(PORT, () => {
+  app.listen(PORT, "127.0.0.1", () => {
     console.log(`[Server] Listening on http://127.0.0.1:${PORT} (${process.env.NODE_ENV || "development"})`);
   });
 }

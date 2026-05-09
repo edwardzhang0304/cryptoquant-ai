@@ -30,8 +30,8 @@ describe("exchange reconnect helpers", () => {
     });
   });
 
-  it("recognizes OKX timeout and private account connectivity failures", () => {
-    expect(isExchangeConnectivityErrorDetails("okx GET https://www.okx.com/api/v5/account/balance request timed out (10000 ms)")).toBe(true);
+  it("recognizes Binance timeout and private account connectivity failures", () => {
+    expect(isExchangeConnectivityErrorDetails("binanceusdm GET https://fapi.binance.com/fapi/v2/balance request timed out (10000 ms)")).toBe(true);
     expect(isExchangeConnectivityErrorDetails("connect ETIMEDOUT 1.2.3.4:443")).toBe(true);
     expect(isExchangeConnectivityErrorDetails("Invalid order: insufficient margin")).toBe(false);
   });

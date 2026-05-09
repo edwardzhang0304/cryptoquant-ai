@@ -38,9 +38,9 @@ export function usePortfolioData({
 
   const refreshPortfolio = React.useCallback(async () => {
     const [balancePayload, positionsPayload, pnlPayload] = await Promise.all([
-      postJson<BalanceResponse>("/api/okx/balance", { sandbox }, { token }),
-      postJson<PositionRow[]>("/api/okx/positions", { sandbox }, { token }),
-      postJson<RealizedPnlResponse>("/api/okx/realized-pnl", { sandbox }, { token }),
+      postJson<BalanceResponse>("/api/binance/balance", { sandbox }, { token }),
+      postJson<PositionRow[]>("/api/binance/positions", { sandbox }, { token }),
+      postJson<RealizedPnlResponse>("/api/binance/realized-pnl", { sandbox }, { token }),
     ]);
     setBalance(balancePayload);
     setPositions(positionsPayload);
@@ -49,7 +49,7 @@ export function usePortfolioData({
 
   const refreshHistory = React.useCallback(async () => {
     const [historyPayload, tradesPayload] = await Promise.all([
-      postJson<HistoryOrderRow[]>("/api/okx/history", { symbol: selectedSymbol, sandbox }, { token }),
+      postJson<HistoryOrderRow[]>("/api/binance/history", { symbol: selectedSymbol, sandbox }, { token }),
       apiFetch<TradeRow[]>("/api/trades?limit=200", { token }),
     ]);
     setHistoryOrders(historyPayload);

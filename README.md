@@ -1,13 +1,13 @@
 # CryptoQuant AI
 
-CryptoQuant AI is a local-first quantitative cryptocurrency trading dashboard for research, monitoring, backtesting, and optional OKX execution. It combines a React/Vite frontend with an Express/TypeScript backend, local SQLite persistence, OKX market/account integrations, Zhipu GLM-assisted summaries, and risk controls for strategy evaluation.
+CryptoQuant AI is a local-first quantitative cryptocurrency trading dashboard for research, monitoring, backtesting, and optional Binance execution. It combines a React/Vite frontend with an Express/TypeScript backend, local SQLite persistence, Binance market/account integrations, Zhipu GLM-assisted summaries, and risk controls for strategy evaluation.
 
-> This project is for research and personal operations. It is not financial advice. Use demo trading first, keep API permissions limited, and never expose this service directly to the public internet without proper hardening.
+> This project is for research and personal operations. It is not financial advice. Use testnet trading first, keep API permissions limited, and never expose this service directly to the public internet without proper hardening.
 
 ## Features
 
-- OKX market data, account balance, positions, order history, and order submission support.
-- Demo and live OKX credential paths with a local encrypted credential store.
+- Binance market data, account balance, positions, order history, and order submission support.
+- Testnet and live Binance credential paths with a local encrypted credential store.
 - Regime-based strategy engine with trend breakout, mean reversion, macro risk gating, TP/SL construction, and risk kill switch behavior.
 - Shadow trading, walk-forward backtesting, portfolio return analytics, execution diagnostics, reliability views, and audit trails.
 - Local SQLite and JSON persistence for trades, state, risk events, and research snapshots.
@@ -18,10 +18,10 @@ CryptoQuant AI is a local-first quantitative cryptocurrency trading dashboard fo
 - Node.js 24 or newer.
 - npm 10 or newer.
 - Git.
-- Optional OKX API credentials for live or demo trading.
+- Optional Binance API credentials for live or testnet trading.
 - Optional Zhipu GLM API key for AI-assisted summaries.
 - Optional FRED API key for macro data.
-- Optional local HTTP/SOCKS proxy if your network cannot reach OKX directly.
+- Optional local HTTP/SOCKS proxy if your network cannot reach Binance directly.
 
 ## Installation
 
@@ -77,8 +77,8 @@ The app reads configuration from `.env`. Important variables include:
 
 - `ADMIN_USERNAME`, `ADMIN_PASSWORD`, `SESSION_TTL_HOURS` for local operator login.
 - `APP_SECRET` for local encrypted credential storage.
-- `OKX_API_KEY`, `OKX_SECRET_KEY`, `OKX_PASSPHRASE` for OKX live mode.
-- `OKX_DEMO_API_KEY`, `OKX_DEMO_SECRET_KEY`, `OKX_DEMO_PASSPHRASE` for OKX demo mode.
+- `BINANCE_API_KEY`, `BINANCE_SECRET_KEY` for Binance live mode.
+- `BINANCE_TESTNET_API_KEY`, `BINANCE_TESTNET_SECRET_KEY` for Binance USD-M futures testnet mode.
 - `EXCHANGE_PROXY_URL` for optional proxy routing, for example `http://127.0.0.1:10808`.
 - `ZHIPU_API_KEY` and model settings for AI-assisted summaries.
 - `FRED_API_KEY` for macro data.
@@ -88,7 +88,7 @@ Never commit `.env`, `data/`, logs, SQLite files, screenshots containing account
 
 ## Security Notes
 
-- Start with OKX demo trading before live trading.
+- Start with Binance testnet trading before live trading.
 - Restrict exchange API keys to the minimum permissions needed.
 - Do not put API keys in frontend code.
 - Use a long random `APP_SECRET` before saving credentials in the local vault.

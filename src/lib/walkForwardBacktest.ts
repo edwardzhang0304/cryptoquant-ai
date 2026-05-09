@@ -138,7 +138,7 @@ export function buildStrictFactorAudit() {
   const audit: FactorAuditItem[] = [
     {
       factor: "price",
-      label: "OKX OHLCV",
+      label: "Binance OHLCV",
       status: "enabled",
       usedInBacktest: true,
       requiredTimestamp: "bar timestamp",

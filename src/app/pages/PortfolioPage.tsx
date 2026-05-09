@@ -29,7 +29,7 @@ const PortfolioReturnCurveChart = React.lazy(() =>
 const MODE_OPTIONS: Array<{ key: PortfolioReturnMode; label: string }> = [
   { key: "live", label: "实盘" },
   { key: "shadow", label: "影子" },
-  { key: "demo", label: "OKX 模拟盘" },
+  { key: "demo", label: "Binance 模拟盘" },
 ];
 
 const RANGE_OPTIONS: Array<{ key: PortfolioReturnRange; label: string }> = [
@@ -157,7 +157,7 @@ function ReturnDetails({ row }: { row: PortfolioReturnHistoryRow | null }) {
     ["宏观门控", row.macroGate || "—"],
     ["入场理由", row.entryReason || "—"],
     ["退出原因", exitReasonLabel(row.exitReason)],
-    ["数据来源", row.source === "exchange_bill" ? "OKX 账单" : row.source === "shadow" ? "影子执行" : "本地交易"],
+    ["数据来源", row.source === "exchange_bill" ? "Binance 账单" : row.source === "shadow" ? "影子执行" : "本地交易"],
     ["账单类型", row.type || "—"],
     ["账单子类型", row.subType || "—"],
     ["币种", row.ccy || "—"],
@@ -462,7 +462,7 @@ export function ReturnAnalyticsModule({
   if (returnAnalyticsError && !returnAnalytics) {
     return shell(
       <div className="rounded-2xl border border-zinc-800 bg-zinc-950/60 py-10 text-center text-sm text-zinc-400">
-        未拿到真实收益数据前不会展示 0 值收益面板。请检查 OKX 凭据、账户模式和网络连通性后重试。
+        未拿到真实收益数据前不会展示 0 值收益面板。请检查 Binance 凭据、账户模式和网络连通性后重试。
       </div>
     );
   }
@@ -597,7 +597,7 @@ export function PortfolioPage({
         </section>
 
         <section className={cardClassName()}>
-          <SectionTitle title="最近已实现盈亏" subtitle="来自 OKX 账单的近期结算记录。" />
+          <SectionTitle title="最近已实现盈亏" subtitle="来自 Binance 账单的近期结算记录。" />
           <div className="overflow-x-auto rounded-2xl border border-zinc-800">
             <div className="min-w-[560px]">
               <div className="grid grid-cols-[160px_100px_80px_100px_100px] gap-3 border-b border-zinc-800 bg-zinc-950/80 px-4 py-3 text-xs uppercase tracking-wide text-zinc-500">

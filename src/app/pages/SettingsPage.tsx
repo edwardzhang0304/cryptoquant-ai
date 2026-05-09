@@ -36,12 +36,10 @@ export function SettingsPage({
           <div className="grid gap-4 md:grid-cols-2">
             {(
               [
-                ["okxKey", "OKX 实盘 API Key"],
-                ["okxSecret", "OKX 实盘 Secret"],
-                ["okxPass", "OKX 实盘 Passphrase"],
-                ["okxDemoKey", "OKX 模拟盘 API Key"],
-                ["okxDemoSecret", "OKX 模拟盘 Secret"],
-                ["okxDemoPass", "OKX 模拟盘 Passphrase"],
+                ["binanceKey", "Binance 实盘 API Key"],
+                ["binanceSecret", "Binance 实盘 Secret"],
+                ["binanceTestnetKey", "Binance 模拟盘 API Key"],
+                ["binanceTestnetSecret", "Binance 模拟盘 Secret"],
                 ["aiUrl", "AI Proxy URL"],
                 ["aiKey", "AI Proxy Key"],
                 ["aiModel", "AI 决策模型"],
@@ -168,8 +166,8 @@ export function SettingsPage({
             <div className="rounded-2xl border border-zinc-800 bg-zinc-950/60 p-4 text-sm text-zinc-400">
               <div className="mb-2 font-medium text-zinc-200">凭据状态</div>
               <div className="grid gap-2">
-                <div>OKX 实盘：{configStatus?.okxLive ? "已配置" : "未配置"}</div>
-                <div>OKX 模拟盘：{configStatus?.okxDemo ? "已配置" : "未配置"}</div>
+                <div>Binance 实盘：{configStatus?.binanceLive ? "已配置" : "未配置"}</div>
+                <div>Binance 模拟盘：{configStatus?.binanceTestnet ? "已配置" : "未配置"}</div>
                 <div>AI Proxy：{configStatus?.ai || configStatus?.zhipu ? "已配置" : "未配置"}</div>
               </div>
             </div>

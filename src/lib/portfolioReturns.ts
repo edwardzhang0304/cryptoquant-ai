@@ -216,7 +216,7 @@ function deriveTradeCapital(row: {
 
 function normalizeMode(value: unknown) {
   const mode = String(value || '').toLowerCase();
-  if (mode.includes('demo') || mode.includes('sandbox') || mode.includes('paper') || mode.includes('sim')) return 'demo';
+  if (mode.includes('demo') || mode.includes('testnet') || mode.includes('sandbox') || mode.includes('paper') || mode.includes('sim')) return 'demo';
   if (mode.includes('live') || mode.includes('real')) return 'live';
   return null;
 }

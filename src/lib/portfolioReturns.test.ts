@@ -6,7 +6,7 @@ const NOW = 1_700_000_000_000;
 const DAY = 24 * 60 * 60 * 1000;
 
 describe('portfolioReturns', () => {
-  it('builds non-zero live history from OKX account bills and enriches with local trades', () => {
+  it('builds non-zero live history from Binance account bills and enriches with local trades', () => {
     const analytics = buildPortfolioReturnAnalytics({
       mode: 'live',
       range: '30d',
@@ -15,7 +15,7 @@ describe('portfolioReturns', () => {
       bills: [
         {
           id: 'bill-win',
-          mode: 'okx-live',
+          mode: 'binance-live',
           symbol: 'BTC-USDT-SWAP',
           timestamp: NOW - DAY,
           pnl: 123.45,
@@ -29,7 +29,7 @@ describe('portfolioReturns', () => {
       trades: [
         {
           id: 'local-match',
-          mode: 'okx-live',
+          mode: 'binance-live',
           source: 'auto',
           symbol: 'BTC-USDT-SWAP',
           side: 'buy',
@@ -72,7 +72,7 @@ describe('portfolioReturns', () => {
       trades: [
         {
           id: 'local-null',
-          mode: 'okx-live',
+          mode: 'binance-live',
           source: 'auto',
           symbol: 'BTC-USDT-SWAP',
           status: 'closed',
@@ -87,7 +87,7 @@ describe('portfolioReturns', () => {
     expect(analytics.summary.totalPnl).toBe(0);
   });
 
-  it('keeps live and demo OKX bills isolated by mode', () => {
+  it('keeps live and demo Binance bills isolated by mode', () => {
     const analytics = buildPortfolioReturnAnalytics({
       mode: 'demo',
       range: '30d',
@@ -96,14 +96,14 @@ describe('portfolioReturns', () => {
       bills: [
         {
           id: 'live-ignored',
-          mode: 'okx-live',
+          mode: 'binance-live',
           symbol: 'BTC-USDT-SWAP',
           timestamp: NOW - DAY,
           pnl: 100,
         },
         {
           id: 'demo-kept',
-          mode: 'okx-demo',
+          mode: 'binance-testnet',
           symbol: 'BTC-USDT-SWAP',
           timestamp: NOW - DAY,
           pnl: 20,
@@ -125,7 +125,7 @@ describe('portfolioReturns', () => {
       trades: [
         {
           id: 'live-win',
-          mode: 'okx-live',
+          mode: 'binance-live',
           source: 'auto',
           symbol: 'BTC-USDT-SWAP',
           side: 'buy',
@@ -138,7 +138,7 @@ describe('portfolioReturns', () => {
         },
         {
           id: 'live-loss',
-          mode: 'okx-live',
+          mode: 'binance-live',
           symbol: 'ETH-USDT-SWAP',
           side: 'sell',
           status: 'closed',
@@ -150,7 +150,7 @@ describe('portfolioReturns', () => {
         },
         {
           id: 'demo-ignored',
-          mode: 'okx-demo',
+          mode: 'binance-testnet',
           source: 'auto',
           symbol: 'SOL/USDT',
           status: 'closed',
@@ -160,7 +160,7 @@ describe('portfolioReturns', () => {
         },
         {
           id: 'manual-ignored',
-          mode: 'okx-live',
+          mode: 'binance-live',
           source: 'manual',
           symbol: 'DOGE/USDT',
           status: 'closed',
@@ -191,7 +191,7 @@ describe('portfolioReturns', () => {
       trades: [
         {
           id: 'live-ignored',
-          mode: 'okx-live',
+          mode: 'binance-live',
           source: 'auto',
           symbol: 'BTC/USDT',
           status: 'closed',
@@ -201,7 +201,7 @@ describe('portfolioReturns', () => {
         },
         {
           id: 'demo-kept',
-          mode: 'okx-demo',
+          mode: 'binance-testnet',
           source: 'auto',
           symbol: 'BTC/USDT',
           status: 'closed',
@@ -287,7 +287,7 @@ describe('portfolioReturns', () => {
       trades: [
         {
           id: 'fallback-capital',
-          mode: 'okx-live',
+          mode: 'binance-live',
           source: 'auto',
           symbol: 'BTC/USDT',
           status: 'closed',
@@ -313,7 +313,7 @@ describe('portfolioReturns', () => {
       trades: [
         {
           id: 'recent',
-          mode: 'okx-live',
+          mode: 'binance-live',
           source: 'auto',
           symbol: 'BTC/USDT',
           status: 'closed',
@@ -323,7 +323,7 @@ describe('portfolioReturns', () => {
         },
         {
           id: 'old',
-          mode: 'okx-live',
+          mode: 'binance-live',
           source: 'auto',
           symbol: 'BTC/USDT',
           status: 'closed',

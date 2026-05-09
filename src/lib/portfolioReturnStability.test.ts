@@ -63,12 +63,12 @@ describe('portfolioReturnStability', () => {
   });
 
   it('marks cached analytics as stale without changing the original payload', () => {
-    const staleStatus = createPortfolioReturnStaleStatus(analytics, 'OKX timeout', 1_700_000_060_000);
+    const staleStatus = createPortfolioReturnStaleStatus(analytics, 'Binance timeout', 1_700_000_060_000);
     const stale = withPortfolioReturnSourceStatus(analytics, staleStatus);
 
     expect(stale.sourceStatus).toEqual({
       state: 'stale',
-      message: 'OKX timeout',
+      message: 'Binance timeout',
       fetchedAt: 1_700_000_000_000,
       staleSince: 1_700_000_060_000,
     });
@@ -81,7 +81,7 @@ describe('portfolioReturnStability', () => {
     expect(isCurrentPortfolioReturnRequest(3, 3, 'live:30d:200', 'demo:30d:200')).toBe(false);
   });
 
-  it('times out slow OKX requests', async () => {
+  it('times out slow Binance requests', async () => {
     await expect(withTimeout(new Promise((resolve) => setTimeout(resolve, 30)), 1, 'timeout')).rejects.toThrow('timeout');
     await expect(withTimeout(Promise.resolve('ok'), 30, 'timeout')).resolves.toBe('ok');
   });

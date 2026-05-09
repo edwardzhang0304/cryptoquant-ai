@@ -354,7 +354,7 @@ export function BacktestPage({
           <div className="font-semibold text-rose-200">Walk-forward 回测失败</div>
           <div className="mt-2 whitespace-pre-wrap break-words">{backtestError}</div>
           <div className="mt-3 text-xs text-rose-200/70">
-            这里不会回退到旧单段回测或 0% 假曲线；请缩短训练/验证窗口、增加 bars 上限，或检查 OKX OHLCV 数据。
+            这里不会回退到旧单段回测或 0% 假曲线；请缩短训练/验证窗口、增加 bars 上限，或检查 Binance OHLCV 数据。
           </div>
         </section>
       ) : null}

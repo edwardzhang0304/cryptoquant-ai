@@ -35,9 +35,9 @@ export type AuthSessionResponse = {
 };
 
 export type ConfigStatus = {
-  okx?: boolean;
-  okxLive?: boolean;
-  okxDemo?: boolean;
+  binance?: boolean;
+  binanceLive?: boolean;
+  binanceTestnet?: boolean;
   ai?: boolean;
   aiProxy?: boolean;
   zhipu?: boolean;
@@ -77,8 +77,8 @@ export type AutoTradingStatus = {
   exchangeConnectivity?: {
     checkedAt: number | null;
     lastCheckedAt: number | null;
-    okxPublic: boolean | null;
-    okxPrivate: boolean | null;
+    binancePublic: boolean | null;
+    binancePrivate: boolean | null;
     error: string | null;
     lastError: string | null;
     nextRetryAt: number | null;

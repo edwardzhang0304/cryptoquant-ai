@@ -8,7 +8,7 @@ This checklist summarizes the environment, configuration, and safety checks need
 - Node.js 24 or newer.
 - npm 10 or newer.
 - Git.
-- Stable network access to OKX, or a local proxy configured through `EXCHANGE_PROXY_URL`.
+- Stable network access to Binance, or a local proxy configured through `EXCHANGE_PROXY_URL`.
 
 ## First Run
 
@@ -44,20 +44,18 @@ APP_SECRET=YOUR_LONG_RANDOM_APP_SECRET_HERE
 
 ## Optional Integrations
 
-OKX live trading:
+Binance live trading:
 
 ```env
-OKX_API_KEY=YOUR_OKX_API_KEY_HERE
-OKX_SECRET_KEY=YOUR_OKX_SECRET_KEY_HERE
-OKX_PASSPHRASE=YOUR_OKX_PASSPHRASE_HERE
+BINANCE_API_KEY=YOUR_BINANCE_API_KEY_HERE
+BINANCE_SECRET_KEY=YOUR_BINANCE_SECRET_KEY_HERE
 ```
 
-OKX demo trading:
+Binance testnet trading:
 
 ```env
-OKX_DEMO_API_KEY=YOUR_OKX_DEMO_API_KEY_HERE
-OKX_DEMO_SECRET_KEY=YOUR_OKX_DEMO_SECRET_KEY_HERE
-OKX_DEMO_PASSPHRASE=YOUR_OKX_DEMO_PASSPHRASE_HERE
+BINANCE_TESTNET_API_KEY=YOUR_BINANCE_TESTNET_API_KEY_HERE
+BINANCE_TESTNET_SECRET_KEY=YOUR_BINANCE_TESTNET_SECRET_KEY_HERE
 ```
 
 AI summaries and macro data:
@@ -85,13 +83,13 @@ Before publishing to GitHub, verify:
 
 - `.env` is absent.
 - `data/`, `output/`, `dist/`, `node_modules/`, and `.playwright-cli/` are absent.
-- No real OKX, Zhipu, FRED, SMTP, admin, app secret, wallet, or private-key values are present.
+- No real Binance, Zhipu, FRED, SMTP, admin, app secret, wallet, or private-key values are present.
 - No screenshots, logs, SQLite files, or encrypted credential stores are present.
 - `npm run lint`, `npm test`, and `npm run build` pass.
 
 ## Trading Safety
 
-- Start in OKX demo mode.
+- Start in Binance testnet mode.
 - Use minimum required API permissions.
 - Do not expose this app directly to the public internet.
 - Review leverage, order sizing, take-profit, and stop-loss behavior before live execution.

@@ -1,7 +1,7 @@
 {
   "name": "cryptoquant-ai",
   "version": "0.1.0",
-  "description": "Local-first quantitative crypto trading dashboard with OKX integration, backtesting, risk controls, and AI-assisted summaries.",
+  "description": "Local-first quantitative crypto trading dashboard with Binance integration, backtesting, risk controls, and AI-assisted summaries.",
   "license": "MIT",
   "type": "module",
   "engines": {

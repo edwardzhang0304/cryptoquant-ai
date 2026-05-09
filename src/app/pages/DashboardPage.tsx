@@ -99,13 +99,13 @@ export function DashboardPage({
             </div>
           ) : null}
           <div className="mb-5 grid gap-3 md:grid-cols-3">
-            <div className={`rounded-2xl border px-4 py-3 text-sm ${connectionClassName(autoStatus?.exchangeConnectivity?.okxPublic)}`}>
-              <div className="text-xs text-zinc-400">OKX 公共接口</div>
-              <div className="mt-1 font-medium">{connectionLabel(autoStatus?.exchangeConnectivity?.okxPublic)}</div>
+            <div className={`rounded-2xl border px-4 py-3 text-sm ${connectionClassName(autoStatus?.exchangeConnectivity?.binancePublic)}`}>
+              <div className="text-xs text-zinc-400">Binance 公共接口</div>
+              <div className="mt-1 font-medium">{connectionLabel(autoStatus?.exchangeConnectivity?.binancePublic)}</div>
             </div>
-            <div className={`rounded-2xl border px-4 py-3 text-sm ${connectionClassName(autoStatus?.exchangeConnectivity?.okxPrivate)}`}>
-              <div className="text-xs text-zinc-400">OKX 私有账户</div>
-              <div className="mt-1 font-medium">{connectionLabel(autoStatus?.exchangeConnectivity?.okxPrivate)}</div>
+            <div className={`rounded-2xl border px-4 py-3 text-sm ${connectionClassName(autoStatus?.exchangeConnectivity?.binancePrivate)}`}>
+              <div className="text-xs text-zinc-400">Binance 私有账户</div>
+              <div className="mt-1 font-medium">{connectionLabel(autoStatus?.exchangeConnectivity?.binancePrivate)}</div>
             </div>
             <div className={`rounded-2xl border px-4 py-3 text-sm ${connectionClassName(autoStatus?.exchangeConnectivity?.proxy?.reachable)}`}>
               <div className="text-xs text-zinc-400">代理链路</div>
@@ -118,7 +118,7 @@ export function DashboardPage({
           </div>
           {autoStatus?.exchangeConnectivity?.nextRetryAt ? (
             <div className="mb-4 rounded-2xl border border-amber-500/30 bg-amber-500/10 px-4 py-3 text-sm leading-6 text-amber-100">
-              正在自动尝试恢复 OKX 数据链路：{formatRetryDistance(autoStatus.exchangeConnectivity.nextRetryAt)}
+              正在自动尝试恢复 Binance 数据链路：{formatRetryDistance(autoStatus.exchangeConnectivity.nextRetryAt)}
               {autoStatus.exchangeConnectivity.consecutiveFailures ? `，连续失败 ${autoStatus.exchangeConnectivity.consecutiveFailures} 次` : ""}
               {autoStatus.exchangeConnectivity.lastError ? `。最近错误：${autoStatus.exchangeConnectivity.lastError}` : ""}
             </div>

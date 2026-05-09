@@ -1,4 +1,4 @@
-export const OKX_AUTO_DATA_REQUEST_TIMEOUT_MS = 25_000;
+export const BINANCE_AUTO_DATA_REQUEST_TIMEOUT_MS = 25_000;
 
 export const AUTO_TRADING_DATA_RETRY_DELAYS_MS = [2_000, 5_000, 10_000] as const;
 
@@ -15,9 +15,10 @@ const CONNECTIVITY_ERROR_TOKENS = [
   "timeout",
   "network timeout",
   "socket hang up",
-  "api/v5/asset/currencies",
-  "api/v5/account/balance",
-  "api/v5/account/positions",
+  "fapi.binance.com",
+  "fapi/v1/balance",
+  "fapi/v2/balance",
+  "fapi/v2/positionRisk",
 ] as const;
 
 export function getReconnectDelayMs(consecutiveFailures: number) {

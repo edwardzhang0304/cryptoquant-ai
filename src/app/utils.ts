@@ -24,12 +24,10 @@ import {
 } from "../lib/tradingRuntime";
 
 export type CredentialsForm = {
-  okxKey: string;
-  okxSecret: string;
-  okxPass: string;
-  okxDemoKey: string;
-  okxDemoSecret: string;
-  okxDemoPass: string;
+  binanceKey: string;
+  binanceSecret: string;
+  binanceTestnetKey: string;
+  binanceTestnetSecret: string;
   aiUrl: string;
   aiKey: string;
   aiModel: string;

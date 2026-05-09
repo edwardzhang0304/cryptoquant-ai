@@ -53,12 +53,10 @@ export function ConsoleApp() {
   });
   const [configStatus, setConfigStatus] = React.useState<ConfigStatus | null>(null);
   const [credentialsForm, setCredentialsForm] = React.useState<CredentialsForm>({
-    okxKey: "",
-    okxSecret: "",
-    okxPass: "",
-    okxDemoKey: "",
-    okxDemoSecret: "",
-    okxDemoPass: "",
+    binanceKey: "",
+    binanceSecret: "",
+    binanceTestnetKey: "",
+    binanceTestnetSecret: "",
     aiUrl: "",
     aiKey: "",
     aiModel: "",
